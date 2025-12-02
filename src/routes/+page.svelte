@@ -78,7 +78,7 @@
   
 
   .title-section h1 {
-    font-size: 28px;
+    font-size: 36px;
     font-weight: 700;
     margin: 0 0 16px 0;
     line-height: 1.3;
@@ -128,9 +128,6 @@
     background-color: #00C266; 
     color: #111827;
     border: 2px solid #00C266;
-    /* ถ้าอยากได้แบบโปร่งใส (Outline) ให้เปิด comment ด้านล่าง */
-    /* background-color: transparent; */
-    /* color: #00C266; */
   }
 
 
@@ -140,7 +137,5 @@
     text-decoration: underline;
     cursor: pointer;
   }
-
-
 
 </style>

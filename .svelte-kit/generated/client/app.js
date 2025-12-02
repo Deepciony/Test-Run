@@ -26,9 +26,7 @@ export const nodes = [
 	() => import('./nodes/22'),
 	() => import('./nodes/23'),
 	() => import('./nodes/24'),
-	() => import('./nodes/25'),
-	() => import('./nodes/26'),
-	() => import('./nodes/27')
+	() => import('./nodes/25')
 ];
 
 export const server_loads = [];
@@ -43,23 +41,21 @@ export const dictionary = {
 		"/eventlist": [5],
 		"/eventverify-officer": [9],
 		"/login": [10],
-		"/monthly-reward-completed-user": [12],
-		"/monthly-reward-inprogress-user": [13],
-		"/monthly-reward": [11],
-		"/myevents-history": [14],
-		"/myevents-upcoming-2": [16],
-		"/myevents-upcoming": [15],
-		"/notFound": [17],
-		"/register-officer": [18],
-		"/register-student": [19],
-		"/reset-password-2": [21],
-		"/reset-password-3": [22],
-		"/reset-password-4": [23],
-		"/reset-password": [20],
-		"/setting-account-officer": [24],
-		"/setting-account-student": [25],
-		"/upload-proof-officer-2": [27],
-		"/upload-proof-officer": [26]
+		"/monthly-reward-completed-user": [11],
+		"/monthly-reward-officer": [12],
+		"/monthly-reward-user": [13],
+		"/myevents-upcoming": [14],
+		"/notFound": [15],
+		"/register-officer": [16],
+		"/register-student": [17],
+		"/reset-password-2": [19],
+		"/reset-password-3": [20],
+		"/reset-password-4": [21],
+		"/reset-password": [18],
+		"/setting-account-officer": [22],
+		"/setting-account-student": [23],
+		"/upload-proof-officer-2": [25],
+		"/upload-proof-officer": [24]
 	};
 
 export const hooks = {
