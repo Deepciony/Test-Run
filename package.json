@@ -1,5 +1,5 @@
 {
-  "name": "ku-run-check-in-frontend",
+  "name": "check-in",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -10,12 +10,26 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
   },
   "devDependencies": {
+    "@mdi/js": "^7.4.47",
+    "@smui/button": "^8.0.3",
+    "@smui/card": "^8.0.3",
+    "@sveltejs/adapter-auto": "^7.0.0",
+    "@sveltejs/kit": "^2.49.0",
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@tsconfig/svelte": "^5.0.6",
     "@types/node": "^24.10.1",
-    "svelte": "^5.43.8",
+    "svelte": "^5.45.2",
     "svelte-check": "^4.3.4",
     "typescript": "~5.9.3",
     "vite": "^7.2.4"
+  },
+  "dependencies": {
+    "@smui/button": "^7.0.0",
+    "@smui/common": "^7.0.0",
+    "@smui/layout-grid": "^7.0.0",
+    "sass": "^1.94.2",
+    "svelte-material-ui": "^8.0.3",
+    "svelte-routing": "^2.13.0",
+    "svelte-spa-router": "^4.0.1"
   }
 }

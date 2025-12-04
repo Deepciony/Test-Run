@@ -1,0 +1,1 @@
+export { default as component } from "../../../../src/routes/myevents-upcoming-2/+page.svelte";
