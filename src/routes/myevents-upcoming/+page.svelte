@@ -96,7 +96,7 @@
 <div class="app-screen">
     
     <div class="glass-header">
-        <a href="/home" class="back-btn" aria-label="Back">
+        <a href="/eventlist" class="back-btn" aria-label="Back">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         </a>
         <h1 class="page-title">MY EVENTS</h1>
@@ -161,14 +161,22 @@
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
-    :global(body){
+    :global(body) {
         margin: 0; padding: 0;
-        background-color: #111827;
-        color: white;
+        background-color: #111827; 
         font-family: 'Inter', sans-serif;
         overflow: hidden; 
     }
-    
+
+    :global(button),
+    :global(input),
+    :global(textarea),
+    :global(select),
+    :global(h1), :global(h2), :global(h3), :global(h4), :global(h5), :global(h6),
+    :global(p), :global(span), :global(a), :global(div) {
+        font-family: 'Inter', sans-serif !important;
+    }
+
     .app-screen {
         height: 100vh;
         display: flex;
@@ -184,7 +192,7 @@
         background: rgba(17, 24, 39, 0.95);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        border-bottom: 1px solid rgba(17, 24, 39, 0.95);
         display: flex;
         align-items: center;
         justify-content: center;
