@@ -27,31 +27,31 @@ export {};
 
 declare module "$app/types" {
 	export interface AppTypes {
-		RouteId(): "/" | "/createevent-officer-2" | "/createevent-officer" | "/eventlist" | "/eventverify-officer" | "/login" | "/monthly-reward-officer" | "/monthly-reward-user" | "/myevents-upcoming" | "/notFound" | "/register" | "/reset-password-2" | "/reset-password-3" | "/reset-password-4" | "/reset-password" | "/setting-account-officer" | "/setting-account-student" | "/upload-proof-officer";
+		RouteId(): "/" | "/auth" | "/auth/forgot-password" | "/auth/login" | "/auth/register" | "/auth/reset-password" | "/not-found" | "/officer" | "/officer/createevent" | "/officer/eventverify" | "/officer/monthly-reward" | "/officer/setting-account" | "/officer/upload-proof" | "/student" | "/student/event-list" | "/student/monthly-reward" | "/student/myevents-upcoming" | "/student/setting-account";
 		RouteParams(): {
 			
 		};
 		LayoutParams(): {
 			"/": Record<string, never>;
-			"/createevent-officer-2": Record<string, never>;
-			"/createevent-officer": Record<string, never>;
-			"/eventlist": Record<string, never>;
-			"/eventverify-officer": Record<string, never>;
-			"/login": Record<string, never>;
-			"/monthly-reward-officer": Record<string, never>;
-			"/monthly-reward-user": Record<string, never>;
-			"/myevents-upcoming": Record<string, never>;
-			"/notFound": Record<string, never>;
-			"/register": Record<string, never>;
-			"/reset-password-2": Record<string, never>;
-			"/reset-password-3": Record<string, never>;
-			"/reset-password-4": Record<string, never>;
-			"/reset-password": Record<string, never>;
-			"/setting-account-officer": Record<string, never>;
-			"/setting-account-student": Record<string, never>;
-			"/upload-proof-officer": Record<string, never>
+			"/auth": Record<string, never>;
+			"/auth/forgot-password": Record<string, never>;
+			"/auth/login": Record<string, never>;
+			"/auth/register": Record<string, never>;
+			"/auth/reset-password": Record<string, never>;
+			"/not-found": Record<string, never>;
+			"/officer": Record<string, never>;
+			"/officer/createevent": Record<string, never>;
+			"/officer/eventverify": Record<string, never>;
+			"/officer/monthly-reward": Record<string, never>;
+			"/officer/setting-account": Record<string, never>;
+			"/officer/upload-proof": Record<string, never>;
+			"/student": Record<string, never>;
+			"/student/event-list": Record<string, never>;
+			"/student/monthly-reward": Record<string, never>;
+			"/student/myevents-upcoming": Record<string, never>;
+			"/student/setting-account": Record<string, never>
 		};
-		Pathname(): "/" | "/createevent-officer-2" | "/createevent-officer-2/" | "/createevent-officer" | "/createevent-officer/" | "/eventlist" | "/eventlist/" | "/eventverify-officer" | "/eventverify-officer/" | "/login" | "/login/" | "/monthly-reward-officer" | "/monthly-reward-officer/" | "/monthly-reward-user" | "/monthly-reward-user/" | "/myevents-upcoming" | "/myevents-upcoming/" | "/notFound" | "/notFound/" | "/register" | "/register/" | "/reset-password-2" | "/reset-password-2/" | "/reset-password-3" | "/reset-password-3/" | "/reset-password-4" | "/reset-password-4/" | "/reset-password" | "/reset-password/" | "/setting-account-officer" | "/setting-account-officer/" | "/setting-account-student" | "/setting-account-student/" | "/upload-proof-officer" | "/upload-proof-officer/";
+		Pathname(): "/" | "/auth" | "/auth/" | "/auth/forgot-password" | "/auth/forgot-password/" | "/auth/login" | "/auth/login/" | "/auth/register" | "/auth/register/" | "/auth/reset-password" | "/auth/reset-password/" | "/not-found" | "/not-found/" | "/officer" | "/officer/" | "/officer/createevent" | "/officer/createevent/" | "/officer/eventverify" | "/officer/eventverify/" | "/officer/monthly-reward" | "/officer/monthly-reward/" | "/officer/setting-account" | "/officer/setting-account/" | "/officer/upload-proof" | "/officer/upload-proof/" | "/student" | "/student/" | "/student/event-list" | "/student/event-list/" | "/student/monthly-reward" | "/student/monthly-reward/" | "/student/myevents-upcoming" | "/student/myevents-upcoming/" | "/student/setting-account" | "/student/setting-account/";
 		ResolvedPathname(): `${"" | `/${string}`}${ReturnType<AppTypes['Pathname']>}`;
 		Asset(): "/logo-ku.png" | string & {};
 	}
