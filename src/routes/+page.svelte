@@ -2,6 +2,10 @@
     import { goto } from "$app/navigation";
 </script>
 
+<svelte:head>
+	<title>KU-RUN-CHECK-IN</title>
+</svelte:head>
+
 <div class="mobile-wrapper">
     <div class="content-container">
         <div class="logo-section">
@@ -16,11 +20,11 @@
         </div>
 
         <div class="action-section">
-            <a href="/login" class="btn btn-login">
+            <a href="/auth/login" class="btn btn-login">
                 LOGIN NOW
             </a>
 
-            <a href="/register-student" class="btn btn-signup">
+            <a href="/auth/register" class="btn btn-signup">
                 SIGN UP
             </a>
         </div>
