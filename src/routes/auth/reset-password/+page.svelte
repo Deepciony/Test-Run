@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { slide, scale } from "svelte/transition";
+  import { page } from "$app/stores";
+  import { onMount } from "svelte";
 
   const API_BASE = import.meta.env.VITE_API_BASE_URL;
-
 
   let currentStep = 1;
   let isLoading = false;
@@ -16,14 +15,15 @@
   let messageTimeout: any;
   let errorField: string = "";
 
+  let password = "";
+  let confirmPassword = "";
+  let showPassword1 = false;
+  let showPassword2 = false;
 
   onMount(() => {
     token = $page.url.searchParams.get("token");
     if (!token) {
-      showMessage(
-        "Invalid or missing token. Please request a new link.",
-        "error"
-      );
+      showMessage("Invalid link. Token is missing.", "error");
     }
   });
 
@@ -39,7 +39,7 @@
     messageTimeout = setTimeout(() => {
       message = "";
       errorField = "";
-    }, 3000);
+    }, 4000);
   }
 
   function clearMessage() {
@@ -50,19 +50,14 @@
     }
   }
 
-  let password = "";
-  let confirmPassword = "";
-  let showPassword1 = false;
-  let showPassword2 = false;
-
   function validatePassword(value: string): boolean {
     return /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$/.test(value);
   }
 
-  async function handleSetNewPassword(): Promise<void> {
+  async function handleResetPassword(): Promise<void> {
     clearMessage();
-    if (!token) return showMessage("Missing token.", "error");
-
+    if (!token)
+      return showMessage("Invalid link. Please request a new one.", "error");
     if (!password)
       return showMessage("Please enter a new password.", "error", "password");
     if (!validatePassword(password))
@@ -85,26 +80,33 @@
       const res = await fetch(`${API_BASE}/api/users/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token, new_password: password }),
+        body: JSON.stringify({
+          token: token,
+          new_password: password,
+        }),
       });
 
       const data = await res.json().catch(() => ({}));
 
       if (res.ok) {
-        currentStep = 2; // Success
+        currentStep = 2;
+        const channel = new BroadcastChannel('auth-sync');
+        channel.postMessage('password-reset-success');
+        channel.close();
+        setTimeout(() => {
+          goto("/auth/login");
+        }, 3000);
       } else {
-        const msg = data.detail || "Failed to reset password.";
-        showMessage(msg, "error");
+        showMessage(
+          data.detail || "Failed to reset password. Link may be expired.",
+          "error"
+        );
       }
     } catch (error) {
       showMessage("Cannot connect to server.", "error");
     } finally {
       isLoading = false;
     }
-  }
-
-  function handleFinish() {
-    goto("/auth/login");
   }
 </script>
 
@@ -113,9 +115,9 @@
     <div class="glass-header">
       <button
         class="back-btn"
+        aria-label="Back to login"
         on:click={() => goto("/auth/login")}
         disabled={isLoading}
-        aria-label="Back to login"
       >
         <svg
           width="24"
@@ -134,20 +136,20 @@
     </div>
   {/if}
 
-  <div class="scroll-container" class:pt-120={currentStep === 2}>
+  <div class="scroll-container">
     <div class="content-wrapper">
       <div class={currentStep === 2 ? "success-card" : "form-card"}>
         {#if currentStep === 1}
           <div class="title-section" in:slide>
             <h1 class="main-title">SET NEW PASSWORD</h1>
             <p class="sub-title">
-              Create a new password. Ensure it differs from previous ones for
-              security.
+              Create a new password. Ensure it differs from previous ones.
             </p>
           </div>
+
           <div class="form-section" in:slide>
             <div class="form-group">
-              <label class="label" for="new-password">Password</label>
+              <label class="label" for="new-password">New Password</label>
               <div
                 class="input-field {errorField === 'password'
                   ? 'error-border'
@@ -161,12 +163,12 @@
                   on:input={clearMessage}
                   disabled={isLoading}
                 />
-
                 <button
                   type="button"
                   class="toggle-password"
-                  on:click={() => (showPassword1 = !showPassword1)}
                   aria-label={showPassword1 ? "Hide password" : "Show password"}
+                  on:click={() => (showPassword1 = !showPassword1)}
+                  tabindex="-1"
                 >
                   {#if showPassword1}
                     <svg
@@ -217,12 +219,12 @@
                   on:input={clearMessage}
                   disabled={isLoading}
                 />
-
                 <button
                   type="button"
                   class="toggle-password"
-                  on:click={() => (showPassword2 = !showPassword2)}
                   aria-label={showPassword2 ? "Hide password" : "Show password"}
+                  on:click={() => (showPassword2 = !showPassword2)}
+                  tabindex="-1"
                 >
                   {#if showPassword2}
                     <svg
@@ -267,7 +269,7 @@
 
             <button
               class="primary-btn"
-              on:click={handleSetNewPassword}
+              on:click={handleResetPassword}
               disabled={isLoading}
             >
               {#if isLoading}
@@ -295,16 +297,15 @@
               >
             </div>
           </div>
-          <div class="title-section" style="text-align: center;">
-            <h1 class="main-title">PASSWORD RESET</h1>
-            <p class="sub-title">
-              Your password has been successfully reset.<br />Click confirm to
-              login.
-            </p>
+          <div class="title-section" style="text-align: center;" in:slide>
+            <h1 class="main-title">PASSWORD UPDATED</h1>
+            <p class="sub-title">Your password has been reset successfully.</p>
           </div>
-          <button class="primary-btn" type="button" on:click={handleFinish}
-            >CONFIRM</button
-          >
+          
+          <div class="loading-wrapper" in:slide={{ delay: 200 }}>
+            <div class="spinner"></div>
+            <span class="redirect-text">Redirecting to login...</span>
+          </div>
         {/if}
       </div>
     </div>
@@ -326,14 +327,10 @@
     font-family: "Inter", sans-serif !important;
   }
   :global(::placeholder) {
-    font-family: "Inter", sans-serif !important;
     color: #6b7280;
   }
-
   input::-ms-reveal,
-  input::-ms-clear {
-    display: none;
-  }
+  input::-ms-clear,
   input::-webkit-password-reveal-button {
     display: none;
     -webkit-appearance: none;
@@ -387,9 +384,6 @@
     padding-top: 100px;
     padding-bottom: 40px;
   }
-  .scroll-container.pt-120 {
-    padding-top: 120px;
-  }
   .scroll-container::-webkit-scrollbar {
     display: none;
   }
@@ -412,13 +406,14 @@
     align-items: center;
     text-align: center;
   }
+
   .title-section {
     text-align: left;
     margin-bottom: 32px;
   }
   .success-card .title-section {
     text-align: center;
-    margin-bottom: 40px;
+    margin-bottom: 24px;
   }
   .main-title {
     color: #f3f4f6;
@@ -437,6 +432,7 @@
     margin: 0;
     line-height: 1.5;
   }
+
   .form-section {
     display: flex;
     flex-direction: column;
@@ -452,6 +448,7 @@
     font-size: 18px;
     font-weight: 600;
   }
+
   .input-field {
     display: flex;
     align-items: center;
@@ -476,23 +473,29 @@
     outline: none;
     height: 100%;
     padding: 0;
+    min-width: 0;
   }
   .error-border {
     border-color: #ef4444 !important;
     box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.25) !important;
   }
+
   .toggle-password {
     background: none;
     border: none;
     color: #9ca3af;
     cursor: pointer;
     display: flex;
-    padding: 0;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    margin-right: -8px;
     transition: color 0.2s;
   }
   .toggle-password:hover {
     color: #f3f4f6;
   }
+
   .message-container {
     display: flex;
     align-items: center;
@@ -539,6 +542,8 @@
   }
   .icon-wrapper {
     margin-bottom: 32px;
+    display: flex;
+    justify-content: center;
   }
   .success-circle {
     width: 100px;
@@ -551,5 +556,43 @@
     justify-content: center;
     color: #10b981;
     box-shadow: 0 0 20px rgba(16, 185, 129, 0.2);
+  }
+
+  .loading-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    margin-top: 10px;
+  }
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(16, 185, 129, 0.2);
+    border-radius: 50%;
+    border-top-color: #10b981;
+    animation: spin 1s ease-in-out infinite;
+  }
+  .redirect-text {
+    color: #6b7280;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 0.6;
+    }
+    50% {
+      opacity: 1;
+    }
   }
 </style>
