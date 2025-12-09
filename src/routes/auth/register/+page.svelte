@@ -153,7 +153,7 @@
   }
 
   function validatePassword(value: string): boolean {
-    return /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$/.test(value);
+    return /^(?=.[A-Za-z])(?=.\d)(?=.[@$!%#?&])[A-Za-z\d@$!%*#?&]{8,}$/.test(value);
   }
   async function handleSignup(): Promise<void> {
     clearMessage();

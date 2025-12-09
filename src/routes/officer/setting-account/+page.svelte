@@ -101,7 +101,7 @@
 
 <div class="app-screen">
   <div class="glass-header">
-    <a href="/officer/createevent" class="back-btn" aria-label="Back">
+    <a href="/officer/create-event" class="back-btn" aria-label="Back">
       <svg
         width="24"
         height="24"
