@@ -2,7 +2,7 @@
   import { goto } from "$app/navigation";
   import { slide } from "svelte/transition";
 
-  import { auth, type LoginResponse } from "$lib/stores/auth";
+  import { auth, type LoginResponse } from "$lib/utils/auth";
 
   let email: string = "";
   let password: string = "";
@@ -40,50 +40,53 @@
   }
 
   async function submitLogin(): Promise<void> {
-    clearError();
+      clearError();
 
-    if (!email) return showError("Please enter your email.", "email");
-    if (!validateEmail(email))
-      return showError("Invalid email format.", "email");
-    if (!password) return showError("Please enter your password.", "password");
+      if (!email) return showError("Please enter your email.", "email");
+      if (!validateEmail(email)) return showError("Invalid email format.", "email");
+      if (!password) return showError("Please enter your password.", "password");
 
-    try {
-      const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-      const API_URL = `${base}/api/users/login`;
+      try {
+          const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+          const API_URL = `${base}/api/users/login`;
 
-      const res = await fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+          const res = await fetch(API_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email, password }),
+          });
 
-      const data = await res.json().catch(() => ({}));
+          const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        const msg = data.detail
-          ? typeof data.detail === "string"
-            ? data.detail
-            : "Login failed."
-          : "Login failed. Please check your credentials.";
+          if (!res.ok) {
+              const msg = data.detail
+                  ? typeof data.detail === "string"
+                      ? data.detail
+                      : "Login failed."
+                  : "Login failed. Please check your credentials.";
+              return showError(msg, "both");
+          }
 
-        return showError(msg, "both");
+          // LoginResponse now includes refresh_token and expires_in
+          const loginData = data as LoginResponse;
+
+          // Store tokens with expiration
+          auth.login(loginData);
+
+          const userRole = (data.role || "").toLowerCase();
+
+          // Navigate based on role
+          if (userRole === "organizer") {
+              await goto("/organizer/create-event", { replaceState: true });
+          } else if (userRole === "officer") {
+              await goto("/officer/event-list", { replaceState: true });
+          } else {
+              await goto("/student/event-list", { replaceState: true });
+          }
+      } catch (error) {
+          console.error("Login Error:", error);
+          showError("Cannot connect to server. Please try again later.", "both");
       }
-
-      const loginData = data as LoginResponse;
-
-      auth.login(loginData);
-
-      const userRole = (data.role || "").toLowerCase();
-
-      if (userRole === "organizer") {
-        await goto("/organizer/create-event", { replaceState: true });
-      } else {
-        await goto("/student/event-list", { replaceState: true });
-      }
-    } catch (error) {
-      console.error("Login Error:", error);
-      showError("Cannot connect to server. Please try again later.", "both");
-    }
   }
 </script>
 
