@@ -75,7 +75,7 @@
 
       const userRole = (data.role || "").toLowerCase();
 
-      if (userRole === "officer") {
+      if (userRole === "organizer") {
         await goto("/organizer/create-event", { replaceState: true });
       } else {
         await goto("/student/event-list", { replaceState: true });
