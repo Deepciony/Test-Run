@@ -1,7 +1,7 @@
 <script lang="ts">
-  import Swal from "sweetalert2";
+    import Swal from "sweetalert2";
 
-  let submissions = [
+    let submissions = [
     {
       id: 1,
       runnerName: "Test One",

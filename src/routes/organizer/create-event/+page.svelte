@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { fade, slide, scale } from "svelte/transition";
-  import { quintOut } from "svelte/easing";
-  import Swal from "sweetalert2";
+    import {onMount} from "svelte";
+    import {fade, scale, slide} from "svelte/transition";
+    import {quintOut} from "svelte/easing";
+    import Swal from "sweetalert2";
 
-  // --- Configuration ---
+    // --- Configuration ---
   const API_BASE_URL = import.meta.env.VITE_API_BASE_URL; // ⚠️ ตรวจสอบ Port ให้ถูกต้อง
 
   let currentView: "list" | "form" = "list";

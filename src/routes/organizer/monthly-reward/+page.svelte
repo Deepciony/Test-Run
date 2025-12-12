@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { slide } from "svelte/transition";
-  import { quintOut } from "svelte/easing";
+    import {slide} from "svelte/transition";
+    import {quintOut} from "svelte/easing";
 
-  let participants = [
+    let participants = [
     { id: 1, name: "Test dee", progress: 3, total: 3, status: "completed" },
     { id: 2, name: "Test dee", progress: 1, total: 3, status: "in-progress" },
     { id: 3, name: "John Doe", progress: 2, total: 3, status: "in-progress" },
