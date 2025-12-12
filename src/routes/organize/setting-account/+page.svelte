@@ -15,7 +15,7 @@
 
   $: {
       if (role === "student") {
-          backUrl = "/student/event-lios";
+          backUrl = "/student/event-list";
       } else {
           backUrl = "/organizer/create-event";
       }
@@ -146,7 +146,7 @@
       isTitleOpen = false;
       isFacultyOpen = false;
       isMajorOpen = false;
-    isDeptOpen = false;
+      isDeptOpen = false;
   }
 
   function toggleDropdown(
@@ -173,14 +173,12 @@
       isTitleOpen = false;
       clearMessage();
   }
-
   function selectFaculty(id: string) {
       faculty = id;
       major = "";
       isFacultyOpen = false;
       clearMessage();
   }
-
   function selectMajor(id: string) {
       major = id;
       isMajorOpen = false;
@@ -189,8 +187,8 @@
 
   function selectDepartment(id: string) {
       department = id;
-    isDeptOpen = false;
-    clearMessage();
+      isDeptOpen = false;
+      clearMessage();
   }
 
   function showMessage(msg: string, type: "error" | "success" = "error") {
@@ -901,7 +899,7 @@
   }
   .label {
     color: #f3f4f6;
-    font-size: 14px;
+      font-size: 14px;
     font-weight: 600;
   }
 
