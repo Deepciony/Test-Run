@@ -1,94 +1,112 @@
 <script lang="ts">
-  import { goto } from "$app/navigation";
-  import { slide } from "svelte/transition";
+    import { goto } from "$app/navigation";
+    import { slide } from "svelte/transition";
+    import axios from "axios";
+    import { auth, type LoginResponse } from "$lib/utils/auth";
 
-  import { auth, type LoginResponse } from "$lib/utils/auth";
-
-  let email: string = "";
-  let password: string = "";
-  let showPassword: boolean = false;
-
-  let errorMessage: string = "";
-  let errorTimeout: any;
-
-  let errorField: string | null = null;
-
-  function togglePassword(): void {
-    showPassword = !showPassword;
-  }
-
-  function validateEmail(value: string): boolean {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-  }
-
-  function clearError() {
-    errorField = null;
-    if (errorMessage) {
-      errorMessage = "";
-      if (errorTimeout) clearTimeout(errorTimeout);
+    interface users_account {
+        email: string;
+        password: string;
+        showPassword: boolean;
+        errorMessage: string;
+        errorTimeout: any;
+        errorField: string | null;
     }
-  }
 
-  function showError(message: string, field: string) {
-    if (errorTimeout) clearTimeout(errorTimeout);
-    errorMessage = message;
-    errorField = field;
-    errorTimeout = setTimeout(() => {
-      errorMessage = "";
-      errorField = null;
-    }, 3000);
-  }
+    let user: users_account = {
+        email: "",
+        password: "",
+        showPassword: false,
+        errorMessage: "",
+        errorTimeout: null,
+        errorField: null,
+    };
 
-  async function submitLogin(): Promise<void> {
-      clearError();
+    function togglePassword(): void {
+        user.showPassword = !user.showPassword;
+    }
 
-      if (!email) return showError("Please enter your email.", "email");
-      if (!validateEmail(email)) return showError("Invalid email format.", "email");
-      if (!password) return showError("Please enter your password.", "password");
+    function validateEmail(value: string): boolean {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    }
 
-      try {
-          const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-          const API_URL = `${base}/api/users/login`;
+    function clearError() {
+        user.errorField = null;
+        if (user.errorMessage) {
+            user.errorMessage = "";
+            if (user.errorTimeout) clearTimeout(user.errorTimeout);
+        }
+    }
 
-          const res = await fetch(API_URL, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email, password }),
-          });
+    function showError(message: string, field: string) {
+        if (user.errorTimeout) clearTimeout(user.errorTimeout);
 
-          const data = await res.json().catch(() => ({}));
+        user.errorMessage = message;
+        user.errorField = field;
 
-          if (!res.ok) {
-              const msg = data.detail
-                  ? typeof data.detail === "string"
-                      ? data.detail
-                      : "Login failed."
-                  : "Login failed. Please check your credentials.";
-              return showError(msg, "both");
-          }
+        user.errorTimeout = setTimeout(() => {
+            user.errorMessage = "";
+            user.errorField = null;
+        }, 3000);
+    }
 
-          // LoginResponse now includes refresh_token and expires_in
-          const loginData = data as LoginResponse;
+    async function submitLogin(): Promise<void> {
+        clearError();
 
-          // Store tokens with expiration
-          auth.login(loginData);
+        if (!user.email)
+            return showError("Please enter your email.", "email");
 
-          const userRole = (data.role || "").toLowerCase();
+        if (!validateEmail(user.email))
+            return showError("Invalid email format.", "email");
 
-          // Navigate based on role
-          if (userRole === "organizer") {
-              await goto("/organizer/create-event", { replaceState: true });
-          } else if (userRole === "officer") {
-              await goto("/officer/event-list", { replaceState: true });
-          } else {
-              await goto("/student/event-list", { replaceState: true });
-          }
-      } catch (error) {
-          console.error("Login Error:", error);
-          showError("Cannot connect to server. Please try again later.", "both");
-      }
-  }
+        if (!user.password)
+            return showError("Please enter your password.", "password");
+
+        try {
+            const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+            const API_URL = `${base}/api/users/login`;
+
+            // ⭐ Axios POST
+            const { data } = await axios.post<LoginResponse>(
+                API_URL,
+                {
+                    email: user.email,
+                    password: user.password,
+                },
+                {
+                    headers: { "Content-Type": "application/json" },
+                    withCredentials: false, // caso precise cookies -> true
+                }
+            );
+
+            // Salvar tokens
+            auth.login(data);
+
+            // Role-based redirect
+            const userRole = (data.role || "").toLowerCase();
+
+            if (userRole === "organizer") {
+                await goto("/organizer/create-event", { replaceState: true });
+            } else if (userRole === "officer") {
+                await goto("/officer/event-list", { replaceState: true });
+            } else {
+                await goto("/student/event-list", { replaceState: true });
+            }
+        } catch (err: any) {
+            console.error("Axios Login Error:", err);
+
+            // ⭐ Tratamento de erro do Axios
+            const msg =
+                err.response?.data?.detail ||
+                err.response?.data?.message ||
+                "Login failed. Please check your credentials.";
+
+            showError(msg, "both");
+        }
+    }
 </script>
+
+
 
 <div class="app-screen">
   <div class="scroll-container">
@@ -103,8 +121,8 @@
           <div class="form-group">
             <label class="label" for="email">Email</label>
             <div
-              class="input-field {errorField === 'email' ||
-              errorField === 'both'
+              class="input-field {user.errorField === 'email' ||
+              user.errorField === 'both'
                 ? 'error'
                 : ''}"
             >
@@ -112,7 +130,7 @@
                 id="email"
                 type="email"
                 placeholder="Enter your email"
-                bind:value={email}
+                bind:value={user.email}
                 on:input={clearError}
               />
             </div>
@@ -124,16 +142,16 @@
               <a href="/auth/forgot-password" class="forgot-link">Forgot ?</a>
             </div>
             <div
-              class="input-field password-field {errorField === 'password' ||
-              errorField === 'both'
+              class="input-field password-field {user.errorField === 'password' ||
+              user.errorField === 'both'
                 ? 'error'
                 : ''}"
             >
               <input
                 id="password"
-                type={showPassword ? "text" : "password"}
+                type={user.showPassword ? "text" : "password"}
                 placeholder="Enter your password"
-                bind:value={password}
+                bind:value={user.password}
                 on:input={clearError}
               />
               <button
@@ -142,7 +160,7 @@
                 on:click={togglePassword}
                 aria-label="Toggle Password Visibility"
               >
-                {#if showPassword}
+                {#if user.showPassword}
                   <svg
                     width="20"
                     height="20"
@@ -174,7 +192,7 @@
             </div>
           </div>
 
-          {#if errorMessage}
+          {#if user.errorMessage}
             <div
               class="message-container error"
               transition:slide={{ duration: 200 }}
@@ -193,7 +211,7 @@
                 <line x1="12" y1="8" x2="12" y2="12"></line>
                 <line x1="12" y1="16" x2="12.01" y2="16"></line>
               </svg>
-              <span>{errorMessage}</span>
+              <span>{user.errorMessage}</span>
             </div>
           {/if}
 
@@ -246,10 +264,7 @@
   input::-ms-clear {
     display: none;
   }
-  input::-webkit-password-reveal-button {
-    display: none;
-    -webkit-appearance: none;
-  }
+
 
   .app-screen {
     height: 100vh;
