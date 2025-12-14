@@ -1,6 +1,7 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
   import { onMount } from "svelte";
+  import Swal from 'sweetalert2';
 
   // --- Configuration ---
   const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(
@@ -227,22 +228,48 @@
     }
   }
 
-  // ✅ FIXED: Two-step upload process with resubmit support
+  // ✅ FIXED: Two-step upload process with logic for Submit vs Resubmit
   async function submitProof(participationId: number, participationStatus: string) {
-    if (!selectedFile || !token) return;
-    
+    if (!selectedFile || !token) {
+       Swal.fire("Error", "กรุณาเลือกไฟล์รูปภาพก่อนส่ง", "warning");
+       return;
+    }
+
+    // ตรวจสอบว่าเป็นเคส Resubmit หรือไม่ (ตามเงื่อนไข: ต้องเป็น REJECTED เท่านั้น)
     const isResubmit = participationStatus === "rejected";
+    
+    // ถามยืนยันก่อนส่ง
+    const confirmResult = await Swal.fire({
+      title: isResubmit ? "ส่งหลักฐานใหม่?" : "ยืนยันการส่งหลักฐาน?",
+      text: isResubmit 
+        ? "คุณต้องการส่งภาพนี้เพื่อแก้ไขการถูกปฏิเสธใช่หรือไม่?" 
+        : "เมื่อส่งแล้วสถานะจะเปลี่ยนเป็น 'รอตรวจสอบ' (Proof Submitted)",
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonColor: "#10B981",
+      cancelButtonColor: "#6B7280",
+      confirmButtonText: isResubmit ? "Yes, Resubmit" : "Yes, Submit"
+    });
+
+    if (!confirmResult.isConfirmed) return;
+
     isSubmitting = true;
 
     try {
+      // -----------------------------------------------------
       // Step 1: Upload image to /api/images/upload
+      // -----------------------------------------------------
       const uploadFormData = new FormData();
       uploadFormData.append("file", selectedFile);
-      uploadFormData.append("subfolder", "proofs");
+      uploadFormData.append("subfolder", "proofs"); // ระบุ subfolder ตาม API Doc
 
       const uploadRes = await fetch(`${API_BASE_URL}/api/images/upload`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 
+            Authorization: `Bearer ${token}` 
+            // หมายเหตุ: ห้ามใส่ Content-Type: multipart/form-data 
+            // เพราะ Browser จะจัดการ Boundary ให้เองเมื่อใช้ FormData
+        },
         body: uploadFormData,
       });
 
@@ -252,46 +279,47 @@
       }
 
       const uploadData = await uploadRes.json();
+      // รองรับการตอบกลับหลายรูปแบบเผื่อ Backend ส่ง key มาต่างกัน
       const imageUrl = uploadData.url || uploadData.path || uploadData.file_path;
 
       if (!imageUrl) {
-        throw new Error("No image URL returned from upload");
+        throw new Error("Server ไม่ส่ง URL รูปภาพกลับมา");
       }
 
-      // Step 2: Submit or Resubmit proof
+      // -----------------------------------------------------
+      // Step 2: Submit or Resubmit logic
+      // -----------------------------------------------------
       let proofRes;
-      
+      const bodyPayload = JSON.stringify({
+         proof_image_url: imageUrl,
+      });
+
       if (isResubmit) {
-        // For REJECTED status - use PUT /resubmit-proof endpoint
-        // Changes status from REJECTED → PROOF_SUBMITTED
-        // Clears rejection_reason and rejected_at
+        // --- CASE: RESUBMIT (PUT) ---
+        // ใช้สำหรับแก้ตัวเมื่อ status เป็น REJECTED
         proofRes = await fetch(
           `${API_BASE_URL}/api/participations/${participationId}/resubmit-proof`,
           {
-            method: "PUT",
+            method: "PUT", // ใช้ PUT ตาม API Doc
             headers: {
               Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-              proof_image_url: imageUrl,
-            }),
+            body: bodyPayload,
           },
         );
       } else {
-        // Regular submit for first-time submission (CHECKED_IN → PROOF_SUBMITTED)
-        // POST /submit-proof endpoint
+        // --- CASE: SUBMIT FIRST TIME (POST) ---
+        // ใช้สำหรับส่งครั้งแรกเมื่อ status เป็น CHECKED_IN
         proofRes = await fetch(
           `${API_BASE_URL}/api/participations/${participationId}/submit-proof`,
           {
-            method: "POST",
+            method: "POST", // ใช้ POST ตาม API Doc
             headers: {
               Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-              proof_image_url: imageUrl,
-            }),
+            body: bodyPayload,
           },
         );
       }
@@ -301,13 +329,28 @@
         throw new Error(errData.detail || "Proof submission failed");
       }
 
-      await fetchUserParticipations();
-      resetFileState();
-      expandedEventId = null; // Close the expanded card after successful upload
-      alert(isResubmit ? "ส่งหลักฐานใหม่เรียบร้อย!" : "อัปโหลดหลักฐานเรียบร้อย!");
+      // -----------------------------------------------------
+      // Success Handling
+      // -----------------------------------------------------
+      await fetchUserParticipations(); // ดึงข้อมูลใหม่เพื่ออัปเดตสถานะ
+      resetFileState(); // เคลียร์ไฟล์ออกจาก input
+      expandedEventId = null; // ปิดการ์ด
+
+      await Swal.fire({
+        title: "Success!",
+        text: isResubmit ? "ส่งหลักฐานใหม่เรียบร้อยแล้ว" : "ส่งหลักฐานเรียบร้อยแล้ว",
+        icon: "success",
+        timer: 2000,
+        showConfirmButton: false
+      });
+
     } catch (error: any) {
-      alert("เกิดข้อผิดพลาด: " + (error.message || error));
       console.error("Submit proof error:", error);
+      Swal.fire({
+        title: "Error",
+        text: error.message || "เกิดข้อผิดพลาดในการส่งข้อมูล",
+        icon: "error"
+      });
     } finally {
       isSubmitting = false;
     }
@@ -704,7 +747,7 @@
                           <button
                             class="primary-btn"
                             disabled={!selectedFile || isSubmitting}
-                            on:click|stopPropagation={() => submitProof(p.id)}
+                            on:click|stopPropagation={() => submitProof(p.id, p.status)}
                           >
                             {isSubmitting
                               ? "Uploading..."
