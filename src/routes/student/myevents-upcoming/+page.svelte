@@ -227,7 +227,7 @@
     }
   }
 
-   // ✅ FIXED: Two-step upload process with resubmit support
+  // ✅ FIXED: Two-step upload process with resubmit support
   async function submitProof(participationId: number, participationStatus: string) {
     if (!selectedFile || !token) return;
     
