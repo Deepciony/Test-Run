@@ -5,10 +5,13 @@
   import Swal from "sweetalert2";
   import { enhance } from "$app/forms";
   import { auth } from "$lib/utils/auth";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+
+  const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
   let isLoading = true;
   let isMenuOpen = false;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   interface EventItem {
     id: number;
@@ -41,48 +44,134 @@
       hour12: false,
       timeZone: "Asia/Bangkok",
     };
-    // format เวลาให้เป็นแบบไทย (อาจจะได้ 15:00 หรือ 15.00 แล้วแต่ Browser)
     const start = new Date(startDateStr).toLocaleTimeString("th-TH", options);
-    
+
     if (endDateStr) {
       const end = new Date(endDateStr).toLocaleTimeString("th-TH", options);
-      // ถ้าเวลาเริ่มกับจบเหมือนกัน (เช่นจบสิ้นวัน) ให้โชว์แค่เวลาเริ่ม
       if (start === end) return start;
       return `${start} - ${end}`;
     }
     return start;
   };
 
-  // --- [UPDATED] Helper: ดึงยอดผู้เข้าร่วมล่าสุด (นับเฉพาะสถานะที่ Active) ---
-  async function fetchEventStats(eventId: number, token: string, baseUrl: string): Promise<number | null> {
+  // ✅ IMPROVED: ดึงยอดผู้เข้าร่วมแบบ Real-time
+  async function fetchEventStats(
+    eventId: number,
+    token: string,
+    baseUrl: string,
+  ): Promise<number | null> {
     try {
-      // console.log(`Fetching stats for Event ID: ${eventId}`); // Uncomment เพื่อดู log
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
       const res = await fetch(`${baseUrl}/api/events/${eventId}/stats`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
       });
-      
+
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const statsData = await res.json();
-        // console.log(`Stats for Event ${eventId}:`, statsData); // ดูข้อมูลดิบจาก API
 
-        // รับค่า status object
-        const s = statsData.status || statsData.status_counts || statsData || {};
+        // 🔍 Handle different possible response structures
+        // Option 1: { total_participants: 10, status_counts: {...}, role_counts: {...} }
+        if (typeof statsData.total_participants === "number") {
+          return statsData.total_participants;
+        }
 
-        // รวมยอด (ตัด Cancelled)
-        const count = 
-          (s["JOINED"] || s["joined"] || 0) +
-          (s["PROOF_SUBMITTED"] || s["proof_submitted"] || s["CHECKED_IN"] || s["checked_in"] || 0) +
-          (s["COMPLETED"] || s["completed"] || 0) +
-          (s["REJECTED"] || s["rejected"] || 0);
+        // Option 2: { status_counts: { JOINED: 5, CHECKED_IN: 3, ... } }
+        if (
+          statsData.status_counts &&
+          typeof statsData.status_counts === "object"
+        ) {
+          const statusCounts = statsData.status_counts;
+          const total = Object.keys(statusCounts).reduce((sum, key) => {
+            // นับทุก status ยกเว้น CANCELLED
+            if (
+              key.toUpperCase() !== "CANCELLED" &&
+              key.toUpperCase() !== "CANCEL"
+            ) {
+              return sum + (Number(statusCounts[key]) || 0);
+            }
+            return sum;
+          }, 0);
+          return total;
+        }
 
-        return count;
-      } else {
-        console.warn(`API Error for Event ${eventId}: Status ${res.status}`);
+        // Option 3: { status: { JOINED: 5, ... } } or direct object
+        const statusObj = statsData.status || statsData;
+        if (statusObj && typeof statusObj === "object") {
+          const total = Object.keys(statusObj).reduce((sum, key) => {
+            const upperKey = key.toUpperCase();
+            if (upperKey !== "CANCELLED" && upperKey !== "CANCEL") {
+              return sum + (Number(statusObj[key]) || 0);
+            }
+            return sum;
+          }, 0);
+          return total;
+        }
+
+        console.warn(
+          `Unexpected API response structure for event ${eventId}:`,
+          statsData,
+        );
       }
-    } catch (err) {
-      console.warn(`Failed to fetch stats for event ${eventId}`, err);
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        console.warn(`Failed to fetch stats for event ${eventId}`, err);
+      }
     }
     return null;
+  }
+
+  // ✅ NEW: Batch Update - ดึงข้อมูลหลาย Events พร้อมกัน
+  async function batchUpdateEvents(): Promise<void> {
+    const token = localStorage.getItem("access_token") || "";
+
+    if (!token || events.length === 0) return;
+
+    const batchSize = 5;
+
+    for (let i = 0; i < events.length; i += batchSize) {
+      const batch = events.slice(i, i + batchSize);
+
+      await Promise.all(
+        batch.map(async (event, batchIndex) => {
+          const newCount = await fetchEventStats(event.id, token, base);
+          if (newCount !== null) {
+            const actualIndex = i + batchIndex;
+            if (events[actualIndex]) {
+              events[actualIndex].participants = newCount;
+            }
+          }
+        }),
+      );
+    }
+
+    events = [...events]; // Trigger reactivity
+  }
+
+  // ✅ NEW: เริ่ม Polling
+  function startPolling(intervalMs: number = 30000) {
+    if (pollInterval) return; // ป้องกันสร้างซ้ำ
+
+    pollInterval = setInterval(async () => {
+      try {
+        await batchUpdateEvents();
+        console.log("✅ Events updated via polling");
+      } catch (err) {
+        console.error("❌ Polling error:", err);
+      }
+    }, intervalMs);
+  }
+
+  // ✅ NEW: หยุด Polling
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
   }
 
   onMount(async () => {
@@ -118,8 +207,6 @@
         throw new Error(`Events API Error: ${eventsRes.status}`);
 
       const eventsData = await eventsRes.json();
-      // console.log("Events Data:", eventsData); // เปิดดูได้ว่า API ส่ง time มาไหม
-
       const myParticipationMap = new Map<number, number>();
 
       if (myParticipationsRes.ok) {
@@ -142,20 +229,17 @@
 
       const enrichedEvents = await Promise.all(
         activeEventsData.map(async (e: any) => {
-          
-          // ดึงยอด Stats (ตามที่คุณต้องการในข้อก่อนหน้า)
           const realTimeCount = await fetchEventStats(e.id, token, base);
-          const finalCount = realTimeCount !== null ? realTimeCount : (e.participant_count || 0);
+          const finalCount =
+            realTimeCount !== null ? realTimeCount : e.participant_count || 0;
 
           const myPartId = myParticipationMap.get(e.id) || null;
           const amIJoined = myPartId !== null;
 
-          // --- [FIXED] Logic การแสดงเวลา ---
-          // เช็คว่ามี e.time หรือ e.event_time จาก API ไหม?
-          // ถ้ามีให้ใช้เลย ถ้าไม่มีให้ใช้ formatTimeRange คำนวณจากวันที่
-          const displayTime = (e.time || e.event_time) 
-            ? (e.time || e.event_time) 
-            : formatTimeRange(e.event_date, e.event_end_date);
+          const displayTime =
+            e.time || e.event_time
+              ? e.time || e.event_time
+              : formatTimeRange(e.event_date, e.event_end_date);
 
           return {
             id: e.id,
@@ -180,17 +264,20 @@
                   timeZone: "Asia/Bangkok",
                 })
               : "N/A",
-            
-            time: displayTime, 
-            
+            time: displayTime,
             isReadMore: false,
             isJoined: amIJoined,
             participationId: myPartId,
           };
-        })
+        }),
       );
 
       events = enrichedEvents;
+
+      // ✅ เริ่ม Polling หลังโหลดข้อมูลเสร็จ (ทุก 30 วินาที)
+      if (events.length > 0) {
+        startPolling(30000);
+      }
     } catch (err) {
       console.error("Error loading data:", err);
       Swal.fire({
@@ -203,15 +290,34 @@
     }
   });
 
-  // ... (ฟังก์ชัน Menu, Navigate อื่นๆ คงเดิม) ...
+  // ✅ หยุด Polling เมื่อออกจากหน้า
+  onDestroy(() => {
+    stopPolling();
+  });
 
-  function toggleMenu() { isMenuOpen = !isMenuOpen; }
-  function handleOverlayKeydown(event: KeyboardEvent) { if (event.key === "Enter" || event.key === " ") toggleMenu(); }
-  beforeNavigate(({ type, cancel }) => { if (type === "popstate") cancel(); });
-  function handleLogout() { auth.logout(); isMenuOpen = false; goto("/auth/login", { replaceState: true }); }
-  function toggleReadMore(index: number) { events[index].isReadMore = !events[index].isReadMore; }
-  function clearClientData() { localStorage.removeItem("user_info"); localStorage.removeItem("access_token"); isMenuOpen = false; }
-
+  function toggleMenu() {
+    isMenuOpen = !isMenuOpen;
+  }
+  function handleOverlayKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter" || event.key === " ") toggleMenu();
+  }
+  beforeNavigate(({ type, cancel }) => {
+    if (type === "popstate") cancel();
+  });
+  function handleLogout() {
+    auth.logout();
+    isMenuOpen = false;
+    goto("/auth/login", { replaceState: true });
+  }
+  function toggleReadMore(index: number) {
+    events[index].isReadMore = !events[index].isReadMore;
+    events = [...events]; // Trigger reactivity
+  }
+  function clearClientData() {
+    localStorage.removeItem("user_info");
+    localStorage.removeItem("access_token");
+    isMenuOpen = false;
+  }
 
   async function handleRegister(eventItem: EventItem) {
     if (eventItem.isJoined) {
@@ -232,7 +338,10 @@
 
     if (result.isConfirmed) {
       try {
-        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(
+          /\/$/,
+          "",
+        );
         const token = localStorage.getItem("access_token");
         if (!token) {
           Swal.fire("Error", "กรุณาเข้าสู่ระบบก่อนลงทะเบียน", "error");
@@ -254,15 +363,14 @@
           eventItem.isJoined = true;
           if (responseData.id) eventItem.participationId = responseData.id;
 
-          // --- [ACTION] ดึงยอดใหม่ทันทีหลังสมัคร ---
+          // ดึงยอดใหม่ทันทีหลังสมัคร
           const newCount = await fetchEventStats(eventItem.id, token, base);
           if (newCount !== null) {
-              eventItem.participants = newCount;
+            eventItem.participants = newCount;
           } else {
-              // Fallback: ถ้าดึงไม่ได้จริงๆ ค่อย +1 เอาเอง
-              eventItem.participants += 1;
+            eventItem.participants += 1;
           }
-          events = events; // Trigger Svelte Reactivity
+          events = [...events]; // Trigger reactivity
 
           await Swal.fire({
             title: "Success!",
@@ -272,13 +380,19 @@
             showConfirmButton: false,
           });
         } else {
-          // ... Error Handling ...
           console.error("Register Failed:", responseData);
-          const errorMsg = responseData.detail || responseData.message || "เกิดข้อผิดพลาดในการลงทะเบียน";
+          const errorMsg =
+            responseData.detail ||
+            responseData.message ||
+            "เกิดข้อผิดพลาดในการลงทะเบียน";
           if (errorMsg.includes("joined") || res.status === 409) {
             eventItem.isJoined = true;
-            events = events;
-            Swal.fire("Already Registered", "คุณได้ลงทะเบียนกิจกรรมนี้ไปแล้ว", "warning");
+            events = [...events];
+            Swal.fire(
+              "Already Registered",
+              "คุณได้ลงทะเบียนกิจกรรมนี้ไปแล้ว",
+              "warning",
+            );
           } else if (errorMsg.includes("full")) {
             Swal.fire("Event Full", "กิจกรรมนี้ผู้เข้าร่วมเต็มแล้ว", "error");
           } else {
@@ -294,7 +408,11 @@
 
   async function handleCancel(eventItem: EventItem) {
     if (!eventItem.participationId) {
-      Swal.fire("Error", "ไม่พบข้อมูลการลงทะเบียน (Participation ID Missing)", "error");
+      Swal.fire(
+        "Error",
+        "ไม่พบข้อมูลการลงทะเบียน (Participation ID Missing)",
+        "error",
+      );
       return;
     }
 
@@ -318,11 +436,14 @@
       const reason = result.value;
 
       try {
-        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(
+          /\/$/,
+          "",
+        );
         const token = localStorage.getItem("access_token") || "";
 
         const res = await fetch(
-          `${base}/api/participations/${eventItem.participationId}/cancel`, 
+          `${base}/api/participations/${eventItem.participationId}/cancel`,
           {
             method: "POST",
             headers: {
@@ -330,27 +451,27 @@
               Authorization: `Bearer ${token}`,
             },
             body: JSON.stringify({ cancellation_reason: reason }),
-          }
+          },
         );
 
         if (res.ok) {
           eventItem.isJoined = false;
           eventItem.participationId = null;
-          
-          // --- [ACTION] ดึงยอดใหม่ทันทีหลังยกเลิก ---
+
+          // ดึงยอดใหม่ทันทีหลังยกเลิก
           const newCount = await fetchEventStats(eventItem.id, token, base);
           if (newCount !== null) {
-              eventItem.participants = newCount; // ใช้ยอดจริงจาก Server (ซึ่งน่าจะลดลงแล้ว)
+            eventItem.participants = newCount;
           } else {
-              // Fallback: ถ้าดึงไม่ได้จริงๆ ค่อย -1 เอาเอง
-              eventItem.participants = Math.max(0, eventItem.participants - 1);
+            eventItem.participants = Math.max(0, eventItem.participants - 1);
           }
-          events = events; 
+          events = [...events]; // Trigger reactivity
 
           Swal.fire("Cancelled", "ยกเลิกการเข้าร่วมเรียบร้อยแล้ว", "success");
         } else {
           const errData = await res.json();
-          const errorMsg = errData.detail || errData.message || "ยกเลิกไม่สำเร็จ";
+          const errorMsg =
+            errData.detail || errData.message || "ยกเลิกไม่สำเร็จ";
           Swal.fire("Failed", errorMsg, "error");
         }
       } catch (err) {
