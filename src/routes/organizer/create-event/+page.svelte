@@ -1,69 +1,208 @@
 <script lang="ts">
-    import {onMount} from "svelte";
-    import {fade, scale, slide} from "svelte/transition";
-    import {quintOut} from "svelte/easing";
-    import Swal from "sweetalert2";
+  import { onMount } from "svelte";
+  import { fade, slide, scale, fly } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
+  import Swal from "sweetalert2";
+  import { enhance } from "$app/forms";
+  import { goto } from "$app/navigation";
+  import { auth } from "$lib/utils/auth";
 
-    // --- Configuration ---
-  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL; // ⚠️ ตรวจสอบ Port ให้ถูกต้อง
-
+  const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(
+    /\/$/,
+    ""
+  );
   let currentView: "list" | "form" = "list";
   let isEditMode = false;
   let editingId: number | null = null;
   let isLoading = false;
-
   let events: any[] = [];
+  let fileInput!: HTMLInputElement;
+  let searchQuery = "";
+  let selDistance = ""; 
+  let isActive = true;
+  let isPublished = false;
 
-  // --- Helpers for Date ---
+  let currentPage = 1;
+  const itemsPerPage = 4;
+
+  $: totalPages = Math.ceil(filteredEvents.length / itemsPerPage) || 1;
+
+  $: paginatedEvents = filteredEvents.slice(
+    (currentPage - 1) * itemsPerPage,
+    currentPage * itemsPerPage
+  );
+
+  $: {
+    searchQuery;
+    filterMonth;
+    filterYear;
+    currentPage = 1;
+  }
+
+  function nextPage() {
+    if (currentPage < totalPages) currentPage++;
+  }
+
+  function prevPage() {
+    if (currentPage > 1) currentPage--;
+  }
+
+  export let filterMonth: string = "";
+  export let filterYear: string | number = "";
+  $: availableYears = [...new Set(events.map((e) => e.year))].sort();
+
+  let showFilterMenu = false;
+
+  function selectMonth(m: string) {
+    filterMonth = filterMonth === m ? "" : m;
+  }
+
+  function selectYear(y: string | number) {
+    filterYear = filterYear === y ? "" : y;
+  }
+
+  function handleClickOutside(event: MouseEvent) {
+    const target = event.target as Element;
+    if (target && !target.closest(".date-filter-wrapper")) {
+      showFilterMenu = false;
+    }
+  }
+
+  onMount(() => {
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  });
+
+  $: filteredEvents = events.filter((event) => {
+    const eventDate = new Date(event.date);
+    const eventMonthName = eventDate.toLocaleString("default", {
+      month: "long",
+    });
+    const eventYear = eventDate.getFullYear();
+    const matchesSearch =
+      searchQuery === "" ||
+      event.title.toLowerCase().includes(searchQuery.toLowerCase());
+
+    const matchesMonth = filterMonth === "" || eventMonthName === filterMonth;
+    const matchesYear = filterYear === "" || eventYear === filterYear;
+    return matchesSearch && matchesMonth && matchesYear;
+  });
+
   const months = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
   ];
 
   function getMonthIndex(monthName: string) {
     return months.indexOf(monthName);
   }
 
-
-  function combineDateToISO(day: string, month: string, year: string, time: string): string | null {
+  function combineDateToISO(
+    day: string,
+    month: string,
+    year: string,
+    time: string
+  ): string | null {
     if (!day || !month || !year || !time) return null;
-    
     const monthIndex = getMonthIndex(month);
     const [hours, minutes] = time.split(":").map(Number);
-    
-    // สร้าง Date Object
-    const date = new Date(parseInt(year), monthIndex, parseInt(day), hours, minutes);
-    
-    // คืนค่าเป็น ISO String
+    const date = new Date(
+      parseInt(year),
+      monthIndex,
+      parseInt(day),
+      hours,
+      minutes
+    );
     return date.toISOString();
   }
-
-  // --- API Functions ---
 
   async function fetchEvents() {
     isLoading = true;
     try {
-      const res = await fetch(`${API_BASE_URL}/`);
-      if (!res.ok) throw new Error("Failed to fetch events");
-      const data = await res.json();
-      
-      // Map ข้อมูลจาก API กลับมาใส่ UI (เพราะชื่อตัวแปรไม่เหมือนกัน)
-      events = data.map((item: any) => ({
-        id: item.id,
-        title: item.title,
-        description: item.description,
-        // ใช้ banner_image_url ถ้ามี ถ้าไม่มีใช้รูป Default
-        image: item.banner_image_url || "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=800&q=80",
-        currentParticipants: 0, // API อาจต้องมี field นี้แยก หรือคำนวณเอา
-        maxParticipants: item.max_participants,
-        location: item.location,
-        // แยก ISO String กลับมาเป็น วัน/เดือน/ปี เพื่อแสดงผลใน Edit Mode
-        ...parseISOToUI(item.event_date, item.event_end_date)
-      }));
+      const token = localStorage.getItem("access_token");
+      if (!token) throw new Error("NO TOKEN FOUND");
 
-    } catch (error) {
-      console.error(error);
-      // Swal.fire("Error", "Connection error", "error");
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      };
+      const res = await fetch(`${API_BASE_URL}/api/events`, { headers });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
+      if (!res.ok) throw new Error("Failed to fetch events");
+
+      const raw = await res.json();
+      const rawList = Array.isArray(raw) ? raw : raw.events || raw.data || [];
+      const eventsWithCount = await Promise.all(
+        rawList.map(async (e: any) => {
+          let participantCount = 0;
+          let studentCount = 0;
+          let officerCount = 0;
+          try {
+            const statsRes = await fetch(
+              `${API_BASE_URL}/api/events/${e.id}/stats`,
+              {
+                method: "GET",
+                headers,
+              }
+            );
+            if (statsRes.ok) {
+              const stats = await statsRes.json();
+              participantCount = stats.total || 0;
+              if (stats.by_role) {
+                const roles = Object.keys(stats.by_role).reduce((acc, key) => {
+                  acc[key.toLowerCase()] = stats.by_role[key];
+                  return acc;
+                }, {} as any);
+                studentCount = (roles.student || 0) + (roles.nisit || 0);
+                officerCount =
+                  (roles.officer || 0) +
+                  (roles.staff || 0) +
+                  (roles.teacher || 0);
+              }
+            } else {
+              console.warn(
+                `Failed to fetch stats for event ${e.id}: ${statsRes.status}`
+              );
+            }
+          } catch (err) {
+            console.error(`Error fetching stats for event ${e.id}`, err);
+          }
+          return {
+            id: e.id,
+            title: e.title,
+            description: e.description,
+            image:
+              e.banner_image_url ||
+              "https://images.unsplash.com/photo-1552674605-46f5383a6719?auto=format&fit=crop&w=600&q=80",
+            location: e.location,
+            maxParticipants: e.max_participants,
+            currentParticipants: participantCount,
+            studentCount: studentCount,
+            officerCount: officerCount,
+            distance_km: e.distance_km, 
+            is_active: e.is_active,
+            is_published: e.is_published,
+            ...parseISOToUI(e.event_date, e.event_end_date),
+          };
+        })
+      );
+      events = eventsWithCount;
+    } catch (err) {
+      console.error("FETCH EVENTS ERROR:", err);
+      events = [];
     } finally {
       isLoading = false;
     }
@@ -72,25 +211,21 @@
   function parseISOToUI(startDateStr: string, endDateStr: string) {
     if (!startDateStr) return {};
     const date = new Date(startDateStr);
-    
-    // ดึงเวลาจบถ้ามี
     let endTimeStr = "";
     if (endDateStr) {
-        const endDate = new Date(endDateStr);
-        const endH = endDate.getHours().toString().padStart(2, '0');
-        const endM = endDate.getMinutes().toString().padStart(2, '0');
-        endTimeStr = `${endH}:${endM}`;
+      const endDate = new Date(endDateStr);
+      const endH = endDate.getHours().toString().padStart(2, "0");
+      const endM = endDate.getMinutes().toString().padStart(2, "0");
+      endTimeStr = `${endH}:${endM}`;
     }
-
-    const startH = date.getHours().toString().padStart(2, '0');
-    const startM = date.getMinutes().toString().padStart(2, '0');
-
+    const startH = date.getHours().toString().padStart(2, "0");
+    const startM = date.getMinutes().toString().padStart(2, "0");
     return {
-        day: date.getDate().toString(),
-        month: months[date.getMonth()],
-        year: date.getFullYear().toString(),
-        startTime: `${startH}:${startM}`,
-        endTime: endTimeStr
+      day: date.getDate().toString(),
+      month: months[date.getMonth()],
+      year: date.getFullYear().toString(),
+      startTime: `${startH}:${startM}`,
+      endTime: endTimeStr,
     };
   }
 
@@ -98,11 +233,10 @@
     fetchEvents();
   });
 
-  // --- Interaction Logic ---
   let isMenuOpen = false;
-
-  function toggleMenu() { isMenuOpen = !isMenuOpen; }
-
+  function toggleMenu() {
+    isMenuOpen = !isMenuOpen;
+  }
   function handleOverlayKeydown(event: KeyboardEvent) {
     if (event.key === "Enter" || event.key === " ") toggleMenu();
   }
@@ -120,11 +254,13 @@
     }).then(async (result) => {
       if (result.isConfirmed) {
         try {
-          const res = await fetch(`${API_BASE_URL}/${id}`, { method: "DELETE" });
+          const token = localStorage.getItem("access_token");
+          const res = await fetch(`${API_BASE_URL}/api/events/${id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          });
           if (!res.ok) throw new Error("Delete failed");
-          
           events = events.filter((e) => e.id !== id);
-          
           Swal.fire({
             title: "Deleted!",
             icon: "success",
@@ -152,26 +288,27 @@
       eventDescription = event.description;
       previewImage = event.image;
       selSlots = event.maxParticipants ? event.maxParticipants.toString() : "";
-      
       eventLocation = event.location || "";
       selDay = event.day || "";
       selMonth = event.month || "";
       selYear = event.year || "";
       selStartTime = event.startTime || "";
       selEndTime = event.endTime || "";
-
       editingId = id;
       isEditMode = true;
       currentView = "form";
+      selDistance = event.distance_km ? event.distance_km.toString() : "";
+      isActive = event.is_active !== undefined ? event.is_active : true;
+      isPublished =
+        event.is_published !== undefined ? event.is_published : false;
     }
   }
 
   function backToList() {
     currentView = "list";
+
     resetForm();
   }
-
-  // --- Form Data ---
   let eventName = "";
   let selDay = "";
   let selMonth = "";
@@ -183,7 +320,6 @@
   let eventDescription = "";
   let previewImage = "";
   let activeDropdown = "";
-
   let errorMessage = "";
   let successMessage = "";
   let msgTimeout: any;
@@ -191,41 +327,140 @@
 
   const days = Array.from({ length: 31 }, (_, i) => (i + 1).toString());
   const currentYear = new Date().getFullYear();
-  const years = Array.from({ length: 10 }, (_, i) => (currentYear + i).toString());
-
+  const years = Array.from({ length: 10 }, (_, i) =>
+    (currentYear + i).toString()
+  );
   const times: string[] = [];
   for (let i = 0; i < 24; i++) {
     const hour = i.toString().padStart(2, "0");
-    times.push(`${hour}:00`);
-    times.push(`${hour}:30`);
+    times.push(`${hour}:00`, `${hour}:30`);
   }
-
-  const slotsOptions = ["10", "20", "50", "100", "200", "500", "Unlimited"];
+  const slotsOptions = ["10", "20", "50", "100", "200", "500"];
 
   function resetForm() {
-    eventName = ""; selDay = ""; selMonth = ""; selYear = "";
-    selStartTime = ""; selEndTime = ""; selSlots = "";
-    eventLocation = ""; eventDescription = ""; previewImage = "";
-    errorMessage = ""; successMessage = ""; errorField = ""; editingId = null;
+    eventName = "";
+    selDay = "";
+    selMonth = "";
+    selYear = "";
+    selStartTime = "";
+    selEndTime = "";
+    selSlots = "";
+    eventLocation = "";
+    eventDescription = "";
+    previewImage = "";
+    errorMessage = "";
+    successMessage = "";
+    errorField = "";
+    selDistance = ""; 
+    isActive = true;
+    isPublished = false;
+    editingId = null;
+    if (fileInput) fileInput.value = "";
   }
 
   function clearMessages() {
     if (errorMessage || successMessage) {
-      errorMessage = ""; successMessage = "";
+      errorMessage = "";
+      successMessage = "";
       if (msgTimeout) clearTimeout(msgTimeout);
     }
   }
 
+  function clearClientData() {
+    localStorage.removeItem("user_info");
+    isMenuOpen = false;
+  }
+
   function handleImageUpload() {
     clearMessages();
-    previewImage = "https://images.unsplash.com/photo-1552674605-46f5383a6719?auto=format&fit=crop&w=600&q=80";
+    if (fileInput) {
+      fileInput.value = "";
+      fileInput.click();
+    }
+  }
+
+  function removeImage(e: Event) {
+    e.stopPropagation();
+    previewImage = "";
+    if (fileInput) fileInput.value = "";
+  }
+
+  let isImageUploading = false;
+
+  async function onFileSelected(e: Event) {
+    const input = e.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+
+    isImageUploading = true;
+    const file = input.files[0];
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("subfolder", "events");
+
+    try {
+      const token = localStorage.getItem("access_token");
+
+      console.log("Start Uploading...");
+
+      const res = await fetch(`${API_BASE_URL}/api/images/upload`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+      const responseText = await res.text();
+      console.log("Server Response (Raw):", responseText);
+      if (!res.ok) throw new Error(responseText || "Upload failed");
+      let imageUrl = "";
+      try {
+        const data = JSON.parse(responseText);
+        imageUrl =
+          data.url ||
+          data.path ||
+          data.filePath ||
+          data.secure_url ||
+          data.image_url;
+        if (!imageUrl && typeof data === "string") {
+          imageUrl = data;
+        }
+      } catch (e) {
+        imageUrl = responseText.replace(/"/g, "");
+      }
+      if (imageUrl) {
+        console.log("Final Preview Image URL:", previewImage);
+      }
+
+      if (imageUrl) {
+        if (!imageUrl.startsWith("http")) {
+          const cleanPath = imageUrl.startsWith("/")
+            ? imageUrl
+            : `/${imageUrl}`;
+          previewImage = `${API_BASE_URL}${cleanPath}`;
+        } else {
+          previewImage = imageUrl;
+        }
+        console.log("Final Preview Image URL:", previewImage);
+      } else {
+        throw new Error("Cannot find image URL in response");
+      }
+    } catch (err: any) {
+      console.error("Upload Error:", err);
+      errorMessage = "Upload failed: " + err.message;
+    } finally {
+      isImageUploading = false;
+      input.value = "";
+    }
   }
 
   function toggleDropdown(name: string, event: Event) {
     event.stopPropagation();
     activeDropdown = activeDropdown === name ? "" : name;
   }
-  function openDropdown(name: string) { activeDropdown = name; }
+  function openDropdown(name: string) {
+    activeDropdown = name;
+  }
+  const distanceOptions = ["10", "20", "50", "100", "200", "500"];
   function selectOption(type: string, value: any) {
     clearMessages();
     if (type === "day") selDay = value;
@@ -234,10 +469,12 @@
     if (type === "startTime") selStartTime = value;
     if (type === "endTime") selEndTime = value;
     if (type === "slots") selSlots = value;
+    if (type === "distance") selDistance = value;
     activeDropdown = "";
   }
-  function closeDropdowns() { activeDropdown = ""; }
-
+  function closeDropdowns() {
+    activeDropdown = "";
+  }
   function handleTimeInput(event: Event, type: "start" | "end") {
     clearMessages();
     const input = event.target as HTMLInputElement;
@@ -248,7 +485,6 @@
     if (type === "start") selStartTime = v;
     if (type === "end") selEndTime = v;
   }
-
   function handleSlotInput(event: Event) {
     clearMessages();
     const input = event.target as HTMLInputElement;
@@ -256,91 +492,150 @@
     input.value = v;
     selSlots = v;
   }
+  function handleLogout() {
+    auth.logout();
+    isMenuOpen = false;
+    goto("/auth/login", { replaceState: true });
+  }
+  function getSelectClass(value: any) {
+    return value === "" ? "text-gray" : "text-dark";
+  }
+  function getAuthHeaders() {
+    const token = localStorage.getItem("access_token");
+    if (!token) throw new Error("No access token found. Please login again.");
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
+  }
 
-  function getSelectClass(value: any) { return value === "" ? "text-gray" : "text-dark"; }
-
-  // --- MAIN PUBLISH LOGIC (Updated for Schema) ---
   async function handlePublish() {
-    if (msgTimeout) clearTimeout(msgTimeout);
-    errorMessage = ""; successMessage = ""; errorField = "";
 
-    // 1. Validation
-    if (!eventName) { errorField = "eventName"; errorMessage = "Please enter the Event name."; } 
-    else if (!selDay) { errorField = "day"; errorMessage = "Please select the Event Day."; } 
-    else if (!selMonth) { errorField = "month"; errorMessage = "Please select the Event Month."; } 
-    else if (!selYear) { errorField = "year"; errorMessage = "Please select the Event Year."; } 
-    else if (!selStartTime) { errorField = "startTime"; errorMessage = "Please enter the Start time."; } 
-    else if (!selEndTime) { errorField = "endTime"; errorMessage = "Please enter the End time."; } 
-    else if (!eventLocation) { errorField = "eventLocation"; errorMessage = "Please enter the Event location."; } 
-    else if (!selSlots) { errorField = "slots"; errorMessage = "Please enter slots."; }
+    if (msgTimeout) clearTimeout(msgTimeout);
+    errorMessage = "";
+    successMessage = "";
+    errorField = "";
+
+
+    if (!eventName) {
+      errorField = "eventName";
+      errorMessage = "Please enter the Event name.";
+    } else if (!selDay) {
+      errorField = "day";
+      errorMessage = "Please select the Event Day.";
+    } else if (!selMonth) {
+      errorField = "month";
+      errorMessage = "Please select the Event Month.";
+    } else if (!selYear) {
+      errorField = "year";
+      errorMessage = "Please select the Event Year.";
+    } else if (!selStartTime) {
+      errorField = "startTime";
+      errorMessage = "Please enter the Start time.";
+    } else if (!selEndTime) {
+      errorField = "endTime";
+      errorMessage = "Please enter the End time.";
+    } else if (!eventLocation) {
+      errorField = "eventLocation";
+      errorMessage = "Please enter the Event location.";
+    } else if (!selSlots) {
+      errorField = "slots";
+      errorMessage = "Please enter slots.";
+    } else if (!previewImage) {
+      errorField = "image";
+      errorMessage = "Please upload an event banner.";
+    }
 
     if (errorMessage) {
-      msgTimeout = setTimeout(() => { errorMessage = ""; errorField = ""; }, 3000);
+      msgTimeout = setTimeout(() => {
+        errorMessage = "";
+        errorField = "";
+      }, 3000);
       return;
     }
 
-    // 2. Data Preparation
-    const isoStartDate = combineDateToISO(selDay, selMonth, selYear, selStartTime);
-    const isoEndDate = combineDateToISO(selDay, selMonth, selYear, selEndTime); // สมมติว่าจบวันเดียวกัน
-
-    // แปลง Slot เป็น Int (ถ้าเป็น Unlimited ให้ส่ง null หรือค่า Max ตามที่ backend ตกลง ในที่นี้ผมส่ง 99999 ไปก่อนถ้า parse ไม่ได้)
-    let maxParticipantsInt: number | null = parseInt(selSlots);
-    if (isNaN(maxParticipantsInt)) {
-        // กรณีเลือก "Unlimited" หรือพิมพ์ข้อความ
-        maxParticipantsInt = selSlots === "Unlimited" ? null : 0; 
+    const isoStartDate = combineDateToISO(
+      selDay,
+      selMonth,
+      selYear,
+      selStartTime
+    );
+    const isoEndDate = combineDateToISO(selDay, selMonth, selYear, selEndTime);
+    const startDateObj = new Date(isoStartDate || "");
+    const endDateObj = new Date(isoEndDate || "");
+    if (endDateObj <= startDateObj) {
+      errorField = "endTime";
+      errorMessage = "End time must be after Start time.";
+      msgTimeout = setTimeout(() => {
+        errorMessage = "";
+        errorField = "";
+      }, 3000);
+      return;
     }
 
-    // สร้าง Payload ตาม Schema เป๊ะๆ
+    let maxParticipantsInt = 0;
+    if (selSlots !== "Unlimited") {
+      maxParticipantsInt = parseInt(selSlots);
+      if (isNaN(maxParticipantsInt)) maxParticipantsInt = 0;
+    }
+    let finalDistance = parseFloat(selDistance);
+    if (isNaN(finalDistance)) finalDistance = 0;
+
     const eventPayload = {
       title: eventName,
-      description: eventDescription || null,
-      event_date: isoStartDate,          // string($date-time)
-      event_end_date: isoEndDate,        // string($date-time) nullable
-      location: eventLocation || null,
-      distance_km: 10,                   // ใส่ค่า Default เพราะ UI ไม่มีช่องกรอก (หรือจะใส่ null)
-      max_participants: maxParticipantsInt, // integer nullable
-      banner_image_url: previewImage || null // string nullable
+      description: eventDescription || "",
+      event_date: isoStartDate,
+      event_end_date: isoEndDate,
+      location: eventLocation,
+      max_participants: maxParticipantsInt,
+      distance_km: finalDistance,
+      is_active: isActive === undefined ? true : isActive,
+      is_published: isPublished === undefined ? false : isPublished,
+      banner_image_url: previewImage || "",
     };
 
+    console.log("Payload Sending:", eventPayload);
     isLoading = true;
 
     try {
+      const headers = getAuthHeaders();
       let response;
+      let result;
       if (isEditMode && editingId) {
-        // Update
-        response = await fetch(`${API_BASE_URL}/${editingId}`, {
+        response = await fetch(`${API_BASE_URL}/api/events/${editingId}`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: headers,
           body: JSON.stringify(eventPayload),
         });
       } else {
-        // Create
-        response = await fetch(`${API_BASE_URL}/`, {
+        response = await fetch(`${API_BASE_URL}/api/events`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: headers,
           body: JSON.stringify(eventPayload),
         });
       }
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.message || "Failed to save event");
+        throw new Error(
+          errorData.message || errorData.detail || "Failed to save event"
+        );
       }
-
-      const result = await response.json();
-
-      // Update UI List
+      result = await response.json();
       const newEventMapped = {
-        id: result.id, // ต้องมั่นใจว่า backend ส่ง id กลับมา
+        id: result.id,
         title: result.title,
         description: result.description,
-        image: result.banner_image_url || "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=800&q=80",
-        currentParticipants: 0,
+        image: result.banner_image_url || "",
+        currentParticipants: result.current_participants || 0,
         maxParticipants: result.max_participants,
         location: result.location,
-        ...parseISOToUI(result.event_date, result.event_end_date)
-      };
+        distance_km: result.distance_km,
+        is_active: result.is_active,
+        is_published: result.is_published,
 
+        ...parseISOToUI(result.event_date, result.event_end_date),
+      };
       if (isEditMode) {
         events = events.map((e) => (e.id === editingId ? newEventMapped : e));
         successMessage = "Event updated successfully.";
@@ -349,15 +644,21 @@
         successMessage = "Event created successfully.";
       }
 
+      await fetchEvents();
+
       msgTimeout = setTimeout(() => {
         successMessage = "";
-        backToList();
+        backToList(); 
       }, 1500);
-
     } catch (error: any) {
       console.error("Save Error:", error);
       errorMessage = error.message;
-      msgTimeout = setTimeout(() => { errorMessage = ""; }, 3000);
+      if (error.message.includes("401")) {
+        handleLogout();
+      }
+      msgTimeout = setTimeout(() => {
+        errorMessage = "";
+      }, 3000);
     } finally {
       isLoading = false;
     }
@@ -418,57 +719,293 @@
       }}
     >
       <div class="menu-arrow"></div>
-      <a href="/officer/event-verify" class="menu-item"
-        ><span class="icon">🔢</span> Verify Code</a
-      >
-      <a href="/officer/upload-proof" class="menu-item"
-        ><span class="icon">📝</span> Verify Proof</a
-      >
-      <a href="/officer/monthly-reward" class="menu-item"
-        ><span class="icon">🏆</span> Monthly Reward</a
-      >
-      <a href="/officer/setting-account" class="menu-item"
-        ><span class="icon">⚙️</span> Settings</a
-      >
+      <a href="/organizer/event-verify" class="menu-item">
+        <span class="icon">&#x2705;</span> Verify Code
+      </a>
+
+      <a href="/organizer/upload-proof" class="menu-item">
+        <span class="icon">&#x1F9FE;</span> Verify Proof
+      </a>
+
+      <a href="/organizer/unlock-user" class="menu-item">
+        <span class="icon">&#x1F513;</span> Unlock User
+      </a>
+
+      <a href="/organizer/event-log" class="menu-item">
+        <span class="icon">&#x1F4CB;</span> Event Log
+      </a>
+
+      <a href="/organizer/monthly-reward" class="menu-item">
+        <span class="icon">&#x1F381;</span> Monthly Reward
+      </a>
+
+      <a href="/organizer/setting-account" class="menu-item">
+        <span class="icon">&#x2699;&#xFE0F;</span> Settings
+      </a>
       <div class="menu-divider"></div>
-      <a href="/" class="menu-item logout"
-        ><span class="icon">🚪</span> Logout</a
+      <form
+        action="?/logout"
+        method="POST"
+        use:enhance={() => {
+          isMenuOpen = false;
+
+          return async ({ result, update }) => {
+            if (result.type === "redirect") {
+              clearClientData();
+              await goto(result.location);
+            } else {
+              await update();
+            }
+          };
+        }}
+        style="display: contents;"
       >
+        <button type="button" class="menu-item logout" on:click={handleLogout}>
+          <span class="icon">🚪</span> Logout
+        </button>
+      </form>
     </div>
   {/if}
 
   <div class="scroll-container">
     <div class="content-wrapper">
       {#if currentView === "list"}
+        <div class="search-sticky-header" in:fade>
+          <div class="search-center-wrapper">
+            <div class="unified-search-bar">
+              <span class="search-icon">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+
+              <input
+                type="text"
+                class="ghost-input"
+                placeholder="Search events..."
+                bind:value={searchQuery}
+              />
+
+              {#if searchQuery}
+                <button
+                  class="clear-btn-inside"
+                  on:click={() => (searchQuery = "")}
+                  aria-label="Clear search"
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              {/if}
+
+              <div class="date-filter-wrapper">
+                <button
+                  class="filter-icon-btn {filterMonth || filterYear
+                    ? 'active'
+                    : ''}"
+                  on:click|stopPropagation={() =>
+                    (showFilterMenu = !showFilterMenu)}
+                  aria-label="Filter Date"
+                >
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"
+                    ></rect>
+                    <line x1="16" y1="2" x2="16" y2="6"></line>
+                    <line x1="8" y1="2" x2="8" y2="6"></line>
+                    <line x1="3" y1="10" x2="21" y2="10"></line>
+                  </svg>
+
+                  {#if filterMonth || filterYear}
+                    <span class="active-dot"></span>
+                  {/if}
+                </button>
+
+                {#if showFilterMenu}
+                  <div class="unified-filter-menu">
+                    <div class="filter-header">
+                      <span class="current-selection">
+                        {filterMonth ? filterMonth : "All Months"}
+                        {filterYear
+                          ? `, ${filterYear}`
+                          : filterYear
+                            ? `All Months, ${filterYear}`
+                            : ""}
+                      </span>
+                      {#if filterMonth || filterYear}
+                        <button
+                          type="button"
+                          class="reset-link"
+                          on:click={() => {
+                            filterMonth = "";
+                            filterYear = "";
+                          }}
+                        >
+                          Reset
+                        </button>
+                      {/if}
+                    </div>
+
+                    <div class="filter-body">
+                      <div class="filter-column year-column">
+                        <div class="column-label">Year</div>
+                        <div class="scroll-area">
+                          <button
+                            type="button"
+                            class="filter-chip {filterYear === ''
+                              ? 'selected'
+                              : ''}"
+                            on:click={() => selectYear("")}
+                          >
+                            All
+                          </button>
+                          {#each availableYears as y}
+                            <button
+                              type="button"
+                              class="filter-chip {filterYear === y
+                                ? 'selected'
+                                : ''}"
+                              on:click={() => selectYear(y)}
+                            >
+                              {y}
+                            </button>
+                          {/each}
+                        </div>
+                      </div>
+
+                      <div class="filter-column month-column">
+                        <div class="column-label">Month</div>
+                        <div class="month-grid">
+                          <button
+                            type="button"
+                            class="filter-chip {filterMonth === ''
+                              ? 'selected'
+                              : ''}"
+                            style="grid-column: span 3;"
+                            on:click={() => selectMonth("")}
+                          >
+                            All Months
+                          </button>
+                          {#each months as m}
+                            <button
+                              type="button"
+                              class="filter-chip {filterMonth === m
+                                ? 'selected'
+                                : ''}"
+                              on:click={() => selectMonth(m)}
+                            >
+                              {m.substring(0, 3)}
+                            </button>
+                          {/each}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="event-list" in:fade>
-          {#each events as event (event.id)}
-            <div class="card">
+          {#each paginatedEvents as event (event.id)}
+            <div class="card" in:fly={{ y: 20, duration: 300, delay: 100 }}>
               <div class="card-image">
                 <img src={event.image} alt={event.title} />
               </div>
               <div class="card-content">
                 <div class="card-header-row">
                   <h3 class="card-title">{event.title}</h3>
-                  <div class="participant-badge">
-                    <svg
-                      class="users-icon"
-                      width="16"
-                      height="16"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
-                      ></path><circle cx="9" cy="7" r="4"></circle><path
-                        d="M23 21v-2a4 4 0 0 0-3-3.87"
-                      ></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                    </svg>
-                    <span
-                      >{event.currentParticipants}/{event.maxParticipants}</span
-                    >
+
+                  <div class="stats-container">
+                    <div class="stat-badge student" title="Students">
+                      <svg
+                        class="users-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path d="M22 10v6M2 10l10-5 10 5-10 5z"></path>
+                        <path d="M6 12v5c3 3 9 3 12 0v-5"></path>
+                      </svg>
+                      <span>{event.studentCount || 0}</span>
+                    </div>
+
+                    <div class="stat-badge officer" title="Officers">
+                      <svg
+                        class="users-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <rect x="2" y="7" width="20" height="14" rx="2" ry="2"
+                        ></rect>
+                        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"
+                        ></path>
+                      </svg>
+                      <span>{event.officerCount || 0}</span>
+                    </div>
+
+                    <div class="stat-badge total" title="Total Participants">
+                      <svg
+                        class="users-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
+                        ></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                      </svg>
+                      <span
+                        >{event.currentParticipants} / {event.maxParticipants}</span
+                      >
+                    </div>
                   </div>
                 </div>
                 <p class="card-desc">{event.description}</p>
@@ -485,7 +1022,63 @@
               </div>
             </div>
           {/each}
+
+          {#if paginatedEvents.length === 0}
+            <div style="text-align: center; color: #888; padding: 20px;">
+              No events found.
+            </div>
+          {/if}
         </div>
+
+        {#if filteredEvents.length > itemsPerPage}
+          <div class="pagination-controls">
+            <button
+              class="glass-btn prev"
+              on:click={prevPage}
+              disabled={currentPage === 1}
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+              <span>Prev</span>
+            </button>
+
+            <div class="page-indicator">
+              <span class="page-number">{currentPage}</span>
+              <span class="page-divider">/</span>
+              <span class="page-total">{totalPages}</span>
+            </div>
+
+            <button
+              class="glass-btn next"
+              on:click={nextPage}
+              disabled={currentPage === totalPages}
+            >
+              <span>Next</span>
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </button>
+          </div>
+        {/if}
 
         <button class="fab-btn" on:click={goToCreate} aria-label="Create Event">
           <svg
@@ -507,35 +1100,105 @@
         </button>
       {:else}
         <div class="form-card" in:slide={{ axis: "y", duration: 300 }}>
-          <button
-            type="button"
-            class="upload-section"
-            on:click={handleImageUpload}
-            aria-label="Upload Event Image"
-          >
-            {#if previewImage}
-              <img src={previewImage} alt="Preview" class="uploaded-img" />
-              <div class="change-overlay">Change Image</div>
-            {:else}
-              <div class="upload-placeholder">
-                <svg
-                  class="camera-icon"
-                  width="32"
-                  height="32"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  ><path
-                    d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
-                  ></path><circle cx="12" cy="13" r="4"></circle></svg
+          <input
+            type="file"
+            accept="image/*"
+            style="display: none;"
+            bind:this={fileInput}
+            on:change={onFileSelected}
+          />
+
+          <div class="upload-wrapper">
+            <span class="form-label">Event Banner</span>
+
+            <div
+              role="button"
+              tabindex="0"
+              class="upload-box {previewImage ? 'has-image' : ''}"
+              class:disabled-box={isImageUploading}
+              on:click={!isImageUploading ? handleImageUpload : null}
+              on:keydown={(e) =>
+                (e.key === "Enter" || e.key === " ") &&
+                !isImageUploading &&
+                handleImageUpload()}
+            >
+              {#if isImageUploading}
+                <div class="upload-loading">
+                  <div class="spinner"></div>
+                  <span>Uploading...</span>
+                </div>
+              {:else if previewImage}
+                <div class="image-container">
+                  <img src={previewImage} alt="Preview" class="uploaded-img" />
+                  <div class="image-overlay">
+                    <span class="edit-text">
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        ><path d="M12 20h9"></path><path
+                          d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+                        ></path></svg
+                      >
+                      Change Image
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  class="remove-fab"
+                  on:click|stopPropagation={removeImage}
+                  title="Remove Image"
                 >
-                <span class="upload-text">Tap To Upload Image</span>
-              </div>
-            {/if}
-          </button>
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    ><line x1="18" y1="6" x2="6" y2="18"></line><line
+                      x1="6"
+                      y1="6"
+                      x2="18"
+                      y2="18"
+                    ></line></svg
+                  >
+                </button>
+              {:else}
+                <div class="upload-placeholder">
+                  <div class="icon-circle">
+                    <svg
+                      width="32"
+                      height="32"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><rect x="3" y="3" width="18" height="18" rx="2" ry="2"
+                      ></rect><circle cx="8.5" cy="8.5" r="1.5"
+                      ></circle><polyline points="21 15 16 10 5 21"
+                      ></polyline></svg
+                    >
+                  </div>
+                  <span class="upload-title">Upload Banner Image</span>
+                  <span class="upload-desc"
+                    >Recommended size 1200x675 (16:9)</span
+                  >
+                </div>
+              {/if}
+            </div>
+          </div>
           <div class="divider"></div>
 
           <div class="form-group">
@@ -844,6 +1507,94 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label class="form-label" for="eventDistance">Distance (km)</label>
+            <div class="custom-select-container">
+              <input
+                id="eventDistance"
+                type="number"
+                class="form-input"
+                class:error-border={errorField === "distance"}
+                placeholder="Enter your distance"
+                value={selDistance}
+                on:input={(e) => {
+                  const target = e.target as HTMLInputElement;
+                  selDistance = target.value;
+                }}
+                on:click={(e) => {
+                  e.stopPropagation();
+                  openDropdown("distance");
+                }}
+                step="0.1"
+                min="0"
+              />
+
+              <svg
+                class="chevron-icon overlay-icon"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+
+              {#if activeDropdown === "distance"}
+                <div
+                  class="dropdown-options"
+                  transition:slide={{ duration: 200 }}
+                >
+                  {#each distanceOptions as dist}
+                    <button
+                      class="option-item {selDistance == dist
+                        ? 'selected'
+                        : ''}"
+                      on:click={(e) => {
+                        e.stopPropagation();
+                        selectOption("distance", dist);
+                      }}
+                    >
+                      {dist} km
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+
+          <div class="toggles-container">
+            <div class="toggle-item">
+              <label class="switch">
+                <input type="checkbox" bind:checked={isActive} />
+                <span class="slider round"></span>
+              </label>
+              <div class="toggle-label">
+                <span>Active Status</span>
+                <small class:text-green={isActive} class:text-gray={!isActive}>
+                  {isActive ? "Event is active" : "Event is inactive"}
+                </small>
+              </div>
+            </div>
+
+            <div class="toggle-item">
+              <label class="switch">
+                <input type="checkbox" bind:checked={isPublished} />
+                <span class="slider round publish"></span>
+              </label>
+              <div class="toggle-label">
+                <span>Publish Now</span>
+                <small
+                  class:text-blue={isPublished}
+                  class:text-gray={!isPublished}
+                >
+                  {isPublished ? "Visible to public" : "Draft mode"}
+                </small>
+              </div>
+            </div>
+          </div>
+
           {#if errorMessage}
             <div class="message-container error" transition:slide>
               <svg
@@ -981,7 +1732,6 @@
     background: rgba(255, 255, 255, 0.2);
   }
 
-
   .scroll-container {
     flex: 1;
     overflow-y: auto;
@@ -1005,6 +1755,7 @@
     display: flex;
     flex-direction: column;
     gap: 24px;
+    margin-top: 20px;
   }
   .card {
     background: white;
@@ -1029,18 +1780,18 @@
   .card-header-row {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 10px;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
   }
   .card-title {
-    font-size: 16px;
-    font-weight: 700;
-    color: #111827;
     margin: 0;
-    line-height: 1.4;
-    flex: 1;
-    text-transform: uppercase;
-    padding-right: 10px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #111827;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .participant-badge {
     display: flex;
@@ -1099,9 +1850,15 @@
     width: 56px;
     height: 56px;
     border-radius: 50%;
-    background-color: transparent;
-    border: 2px solid white;
-    color: white;
+    background: linear-gradient(
+      135deg,
+      rgba(34, 197, 94, 0.6),
+      rgba(34, 197, 94, 0.2)
+    );
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 2px solid #10b981;
+    color: #10b981;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1444,5 +2201,801 @@
   }
   .publish-btn:hover {
     background-color: #059669;
+  }
+
+  .upload-wrapper {
+    margin-bottom: 1.5rem;
+    width: 100%;
+  }
+
+  .upload-box {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    background-color: #f9fafb;
+    border: 2px dashed #e5e7eb;
+    border-radius: 16px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .upload-box:hover {
+    border-color: #b4151d;
+    background-color: #fff5f5;
+  }
+
+  .upload-box.has-image {
+    border: none;
+    background-color: #000;
+  }
+
+  .upload-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    color: #6b7280;
+  }
+
+  .icon-circle {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background-color: #fff;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #b4151d;
+    transition: transform 0.3s ease;
+  }
+
+  .upload-box:hover .icon-circle {
+    transform: scale(1.1);
+  }
+
+  .upload-title {
+    font-weight: 600;
+    font-size: 1rem;
+    color: #374151;
+  }
+  .upload-desc {
+    font-size: 0.8rem;
+    color: #9ca3af;
+  }
+  .image-container {
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  .uploaded-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.5s ease;
+  }
+
+  .image-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    backdrop-filter: blur(2px);
+  }
+
+  .edit-text {
+    color: white;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    border-radius: 99px;
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+  }
+
+  .upload-box:hover .uploaded-img {
+    transform: scale(1.05);
+  }
+
+  .upload-box:hover .image-overlay {
+    opacity: 1;
+  }
+
+  .remove-fab {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background-color: white;
+    color: #ef4444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    z-index: 10;
+    transition: transform 0.2s;
+  }
+
+  .remove-fab:hover {
+    transform: scale(1.1);
+    background-color: #ef4444;
+    color: white;
+  }
+
+  .upload-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    color: #6b7280;
+  }
+
+  .spinner {
+    width: 30px;
+    height: 30px;
+    border: 3px solid #e5e7eb;
+    border-top-color: #b4151d;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  .stats-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .stat-badge {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1;
+  }
+
+  .stat-badge.total {
+    background-color: #f3f4f6;
+    color: #374151;
+  }
+
+  .stat-badge.student {
+    background-color: #eff6ff;
+    color: #1d4ed8;
+  }
+
+  .stat-badge.officer {
+    background-color: #f0fdf4;
+    color: #15803d;
+  }
+
+  .search-sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: transparent;
+    margin-top: 1px;
+    padding: 0px 20px 40px 20px;
+  }
+
+  .search-center-wrapper {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .unified-search-bar {
+    display: flex;
+    align-items: center;
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 12px;
+    padding: 0 12px;
+    width: 100%;
+    max-width: 600px;
+    height: 48px;
+    box-shadow:
+      0 4px 6px -1px rgba(0, 0, 0, 0.1),
+      0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    transition: all 0.2s ease;
+  }
+
+  .unified-search-bar:focus-within {
+    border-color: #10b981;
+    box-shadow: 0 0 0 2px rgba(26, 255, 110, 0.2);
+  }
+
+  .search-icon {
+    color: #9ca3af;
+    display: flex;
+    align-items: center;
+    margin-right: 8px;
+  }
+
+  .ghost-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: white;
+    font-size: 15px;
+    outline: none;
+    min-width: 0;
+  }
+
+  .ghost-input::placeholder {
+    color: #6b7280;
+  }
+
+  .clear-btn-inside {
+    background: transparent;
+    border: none;
+    color: #9ca3af;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    margin-right: 4px;
+    border-radius: 50%;
+    transition:
+      background 0.2s,
+      color 0.2s;
+  }
+
+  .clear-btn-inside:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+  }
+
+  .vertical-divider {
+    width: 1px;
+    height: 24px;
+    background-color: #374151;
+    margin: 0 8px;
+  }
+
+  .select-arrow {
+    position: absolute;
+    right: 4px;
+    pointer-events: none;
+    color: #9ca3af;
+  }
+
+  .vertical-divider {
+    width: 1px;
+    height: 20px;
+    background-color: #4b5563;
+    margin: 0 10px;
+    opacity: 0.5;
+    flex-shrink: 0;
+  }
+
+  .mini-select-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    margin-right: 4px;
+  }
+
+  .mini-select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-color: transparent;
+    border: none;
+    color: #e5e7eb;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 0 24px 0 8px;
+    cursor: pointer;
+    outline: none;
+  }
+
+  .mini-select:hover {
+    color: #ffffff;
+  }
+
+  .select-arrow {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: #9ca3af;
+    transition: transform 0.2s ease;
+  }
+
+  .custom-dropdown-wrapper {
+    position: relative;
+    margin-left: 6px;
+  }
+
+  .custom-dropdown-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    background-color: rgba(55, 65, 81, 0.4);
+    border: 1px solid rgba(75, 85, 99, 0.4);
+    border-radius: 99px;
+    padding: 6px 12px;
+    min-width: 90px;
+    color: #e5e7eb;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .custom-dropdown-btn:hover {
+    background-color: rgba(55, 65, 81, 0.8);
+    color: white;
+  }
+  .custom-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 100;
+    background-color: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 12px;
+    padding: 4px;
+    width: 100%;
+    min-width: 60px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+    max-height: 240px;
+    overflow-y: auto;
+    animation: fadeIn 0.15s ease-out;
+  }
+
+  .dropdown-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 0;
+    font-family: inherit;
+    font-size: inherit;
+    cursor: pointer;
+    outline: none;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: #e5e7eb;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.15s;
+    margin-bottom: 2px;
+  }
+
+  .dropdown-item:hover,
+  .dropdown-item:focus {
+    background-color: rgba(55, 65, 81, 0.8);
+    color: white;
+  }
+
+  .dropdown-item:last-child {
+    margin-bottom: 0;
+  }
+
+  .custom-dropdown-menu::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-dropdown-menu::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-dropdown-menu::-webkit-scrollbar-thumb {
+    background: #4b5563;
+    border-radius: 3px;
+  }
+  .custom-dropdown-menu::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+  }
+
+  .date-filter-wrapper {
+    position: relative;
+    margin-left: 8px;
+  }
+
+  .filter-icon-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    color: #9ca3af;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .filter-icon-btn:hover {
+    background-color: rgba(55, 65, 81, 0.4);
+    color: white;
+  }
+
+  .filter-icon-btn.active {
+    color: white;
+    background-color: rgba(55, 65, 81, 0.6);
+  }
+
+  .active-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    background-color: #10b981;
+    border-radius: 50%;
+    border: 1px solid #1f2937;
+  }
+
+  .unified-filter-menu {
+    position: fixed;
+    top: 42%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 1000;
+    width: 320px;
+    background-color: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 16px;
+    padding: 16px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    animation: popupScale 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+  }
+
+  .unified-filter-menu::before {
+    content: "";
+    position: absolute;
+    top: -6px;
+    left: 86.5%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 12px;
+    height: 12px;
+    background-color: #1f2937;
+    z-index: 1001;
+  }
+
+  .filter-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+    backdrop-filter: blur(2px);
+  }
+
+  @keyframes popupScale {
+    from {
+      transform: translate(-50%, -50%) scale(0.9);
+      opacity: 0;
+    }
+    to {
+      transform: translate(-50%, -50%) scale(1);
+      opacity: 1;
+    }
+  }
+
+  .current-selection {
+    font-size: 13px;
+    color: #e5e7eb;
+    font-weight: 500;
+  }
+
+  .reset-link {
+    background: none;
+    border: none;
+    color: #10b981;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .reset-link:hover {
+    text-decoration: underline;
+  }
+
+  .filter-body {
+    display: flex;
+    gap: 12px;
+    height: 220px;
+  }
+
+  .filter-column {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .year-column {
+    flex: 1;
+    border-right: 1px solid #374151;
+    padding-right: 8px;
+  }
+  .month-column {
+    flex: 2;
+  }
+
+  .column-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .scroll-area {
+    overflow-y: auto;
+    flex: 1;
+    /* Custom Scrollbar */
+    scrollbar-width: thin;
+    scrollbar-color: #4b5563 transparent;
+  }
+
+  .month-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    overflow-y: auto;
+  }
+
+  .filter-chip {
+    background: none;
+    border: none;
+    display: block;
+    width: 100%;
+    text-align: center;
+    padding: 6px 4px;
+    font-size: 13px;
+    color: #9ca3af;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+
+  .filter-chip:hover {
+    background-color: #374151;
+    color: white;
+  }
+
+  .filter-chip.selected {
+    background-color: #10b981;
+    color: white;
+    font-weight: 600;
+  }
+
+  .pagination-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 16px;
+    margin-top: 30px;
+    margin-bottom: 100px;
+    padding: 10px;
+    position: relative;
+    z-index: 10;
+  }
+
+  .page-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .page-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateY(-2px);
+  }
+
+  .page-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .page-info {
+    color: white;
+    font-weight: bold;
+  }
+
+  .glass-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #e5e7eb;
+    padding: 10px 20px;
+    border-radius: 50px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 600;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  .glass-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 15px rgba(0, 0, 0, 0.2);
+    text-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+  }
+
+  .glass-btn:active:not(:disabled) {
+    transform: translateY(0);
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .glass-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    filter: grayscale(1);
+  }
+
+  .glass-btn svg {
+    transition: transform 0.3s ease;
+  }
+
+  .glass-btn.prev:hover:not(:disabled) svg {
+    transform: translateX(-3px);
+  }
+  .glass-btn.next:hover:not(:disabled) svg {
+    transform: translateX(3px);
+  }
+
+  .page-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 8px 16px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    font-family: "Courier New", Courier, monospace;
+  }
+
+  .page-number {
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
+
+  .page-divider {
+    color: #6b7280;
+  }
+
+  .page-total {
+    color: #9ca3af;
+  }
+
+  .toggles-container {
+    display: flex;
+    justify-content: center; 
+    gap: 10px; 
+    margin-top: -20px;
+    margin-bottom: 25px;
+    background: rgba(255, 255, 255, 0.03);
+    margin-bottom: -20px;
+    padding: 20px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .toggle-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center; 
+    gap: 1px; 
+    flex: 1;
+  }
+
+
+  .toggle-label {
+    display: flex;
+    flex-direction: column;
+    text-align: center; 
+  }
+
+  .toggle-label span {
+    font-weight: 600;
+    color: #e5e7eb;
+    font-size: 1rem;
+    margin-bottom: -15px;
+  }
+
+  .toggle-label small {
+    font-size: 0.8rem;
+    opacity: 0.8;
+  }
+
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 52px;
+    height: 28px;
+    flex-shrink: 0;
+  }
+
+  .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #374151; 
+    transition: 0.4s;
+    border-radius: 34px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 4px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.4s;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  input:checked + .slider {
+    background-color: #10b981;
+    border-color: #10b981;
+  }
+
+  input:checked + .slider.publish {
+    background-color: #10b981;
+    border-color: #10b981;
+  }
+
+  input:checked + .slider:before {
+    transform: translateX(24px);
+  }
+
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>
