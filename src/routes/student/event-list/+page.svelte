@@ -1,189 +1,364 @@
 <script lang="ts">
-    import {fade, scale} from "svelte/transition";
-    import {beforeNavigate, goto} from "$app/navigation";
-    import {quintOut} from "svelte/easing";
-    import Swal from "sweetalert2";
-    import {enhance} from "$app/forms";
-    import {auth} from "$lib/utils/auth";
-    import {onMount} from "svelte";
+  import { fade, scale } from "svelte/transition";
+  import { beforeNavigate, goto } from "$app/navigation";
+  import { quintOut } from "svelte/easing";
+  import Swal from "sweetalert2";
+  import { enhance } from "$app/forms";
+  import { auth } from "$lib/utils/auth";
+  import { onMount } from "svelte";
 
-    let isLoading = true;
+  let isLoading = true;
   let isMenuOpen = false;
 
   interface EventItem {
-      id: number;
-      title: string;
-      description: string;
-      location: string;
-      distance_km: number;
-      max_participants: number;
-      banner_image_url: string;
-      is_active: boolean;
-      is_published: boolean;
-      created_by: number;
-      image: string;
-      maxParticipants: number;
-      participants: number;
-      date: string;
-      time: string;
-      isReadMore: boolean;
+    id: number;
+    title: string;
+    description: string;
+    location: string;
+    distance_km: number;
+    banner_image_url: string;
+    is_active: boolean;
+    is_published: boolean;
+    created_by: number;
+    image: string;
+    maxParticipants: number;
+    participants: number;
+    date: string;
+    rawDate: Date;
+    time: string;
+    isReadMore: boolean;
+    isJoined: boolean;
+    participationId: number | null;
   }
 
   let events: EventItem[] = [];
 
-  onMount(async () => {
-      try {
-          const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-          const token = localStorage.getItem("access_token") || "";
-          const res = await fetch(`${base}/api/events/`, {
-              method: "GET",
-              headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${token}`,
-              },
-          });
+  const formatTimeRange = (startDateStr: string, endDateStr?: string) => {
+    if (!startDateStr) return "N/A";
+    const options: Intl.DateTimeFormatOptions = {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "Asia/Bangkok",
+    };
+    // format เวลาให้เป็นแบบไทย (อาจจะได้ 15:00 หรือ 15.00 แล้วแต่ Browser)
+    const start = new Date(startDateStr).toLocaleTimeString("th-TH", options);
+    
+    if (endDateStr) {
+      const end = new Date(endDateStr).toLocaleTimeString("th-TH", options);
+      // ถ้าเวลาเริ่มกับจบเหมือนกัน (เช่นจบสิ้นวัน) ให้โชว์แค่เวลาเริ่ม
+      if (start === end) return start;
+      return `${start} - ${end}`;
+    }
+    return start;
+  };
 
-          if (res.status === 401) {
-              console.error("Token หมดอายุหรือไม่ได้ล็อกอิน");
-              return;
-          }
+  // --- [UPDATED] Helper: ดึงยอดผู้เข้าร่วมล่าสุด (นับเฉพาะสถานะที่ Active) ---
+  async function fetchEventStats(eventId: number, token: string, baseUrl: string): Promise<number | null> {
+    try {
+      // console.log(`Fetching stats for Event ID: ${eventId}`); // Uncomment เพื่อดู log
+      const res = await fetch(`${baseUrl}/api/events/${eventId}/stats`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (res.ok) {
+        const statsData = await res.json();
+        // console.log(`Stats for Event ${eventId}:`, statsData); // ดูข้อมูลดิบจาก API
 
-          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`); // เช็ค error จาก HTTP code ด้วย
+        // รับค่า status object
+        const s = statsData.status || statsData.status_counts || statsData || {};
 
-          const data = await res.json();
+        // รวมยอด (ตัด Cancelled)
+        const count = 
+          (s["JOINED"] || s["joined"] || 0) +
+          (s["PROOF_SUBMITTED"] || s["proof_submitted"] || s["CHECKED_IN"] || s["checked_in"] || 0) +
+          (s["COMPLETED"] || s["completed"] || 0) +
+          (s["REJECTED"] || s["rejected"] || 0);
 
-          events = data.map((e: any) => ({
-              id: e.id,
-              title: e.title,
-              description: e.description,
-              location: e.location,
-              distance_km: e.distance_km,
-              max_participants: e.max_participants,
-              banner_image_url: e.banner_image_url,
-              is_active: e.is_active,
-              is_published: e.is_published,
-              created_by: e.created_by,
-              image: e.banner_image_url,
-              maxParticipants: e.max_participants,
-              participants: 0,
-              date: e.event_date
-                  ? new Date(e.event_date).toLocaleDateString()
-                  : "N/A",
-              time: e.event_date
-                  ? new Date(e.event_date).toLocaleTimeString()
-                  : "N/A",
-              isReadMore: false,
-          }));
-      } catch (err) {
-          console.error("Error loading events:", err);
-          Swal.fire({
-              icon: "error",
-              title: "Oops...",
-              text: "ไม่สามารถโหลดข้อมูลกิจกรรมได้",
-          });
-      } finally {
-          isLoading = false;
+        return count;
+      } else {
+        console.warn(`API Error for Event ${eventId}: Status ${res.status}`);
       }
+    } catch (err) {
+      console.warn(`Failed to fetch stats for event ${eventId}`, err);
+    }
+    return null;
+  }
+
+  onMount(async () => {
+    try {
+      const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+      const token = localStorage.getItem("access_token") || "";
+      const userInfoStr = localStorage.getItem("user_info");
+
+      if (!token || !userInfoStr) {
+        console.error("Token หรือข้อมูลผู้ใช้ไม่พบ");
+        return;
+      }
+
+      const userInfo = JSON.parse(userInfoStr);
+      const userId = userInfo.id;
+
+      const [eventsRes, myParticipationsRes] = await Promise.all([
+        fetch(`${base}/api/events/`, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        }),
+        fetch(`${base}/api/participations/user/${userId}`, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+        }),
+      ]);
+
+      if (!eventsRes.ok)
+        throw new Error(`Events API Error: ${eventsRes.status}`);
+
+      const eventsData = await eventsRes.json();
+      // console.log("Events Data:", eventsData); // เปิดดูได้ว่า API ส่ง time มาไหม
+
+      const myParticipationMap = new Map<number, number>();
+
+      if (myParticipationsRes.ok) {
+        const myData = await myParticipationsRes.json();
+        myData.forEach((item: any) => {
+          const status = item.status ? item.status.toUpperCase() : "";
+          if (status !== "CANCELLED" && status !== "CANCEL") {
+            myParticipationMap.set(Number(item.event_id), Number(item.id));
+          }
+        });
+      }
+
+      const now = new Date();
+      const activeEventsData = eventsData.filter((e: any) => {
+        const eventTime = e.event_end_date
+          ? new Date(e.event_end_date)
+          : new Date(e.event_date);
+        return eventTime >= now;
+      });
+
+      const enrichedEvents = await Promise.all(
+        activeEventsData.map(async (e: any) => {
+          
+          // ดึงยอด Stats (ตามที่คุณต้องการในข้อก่อนหน้า)
+          const realTimeCount = await fetchEventStats(e.id, token, base);
+          const finalCount = realTimeCount !== null ? realTimeCount : (e.participant_count || 0);
+
+          const myPartId = myParticipationMap.get(e.id) || null;
+          const amIJoined = myPartId !== null;
+
+          // --- [FIXED] Logic การแสดงเวลา ---
+          // เช็คว่ามี e.time หรือ e.event_time จาก API ไหม?
+          // ถ้ามีให้ใช้เลย ถ้าไม่มีให้ใช้ formatTimeRange คำนวณจากวันที่
+          const displayTime = (e.time || e.event_time) 
+            ? (e.time || e.event_time) 
+            : formatTimeRange(e.event_date, e.event_end_date);
+
+          return {
+            id: e.id,
+            title: e.title,
+            description: e.description,
+            location: e.location,
+            distance_km: e.distance_km,
+            max_participants: e.max_participants,
+            banner_image_url: e.banner_image_url,
+            is_active: e.is_active,
+            is_published: e.is_published,
+            created_by: e.created_by,
+            image: e.banner_image_url,
+            participants: finalCount,
+            maxParticipants: e.max_participants,
+            rawDate: e.event_date ? new Date(e.event_date) : new Date(),
+            date: e.event_date
+              ? new Date(e.event_date).toLocaleDateString("th-TH", {
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                  timeZone: "Asia/Bangkok",
+                })
+              : "N/A",
+            
+            // ใช้ค่าที่เตรียมไว้
+            time: displayTime, 
+            
+            isReadMore: false,
+            isJoined: amIJoined,
+            participationId: myPartId,
+          };
+        })
+      );
+
+      events = enrichedEvents;
+    } catch (err) {
+      console.error("Error loading data:", err);
+      Swal.fire({
+        icon: "error",
+        title: "Oops...",
+        text: "ไม่สามารถโหลดข้อมูลได้",
+      });
+    } finally {
+      isLoading = false;
+    }
   });
 
-  function toggleMenu() {
-    isMenuOpen = !isMenuOpen;
-  }
+  // ... (ฟังก์ชัน Menu, Navigate อื่นๆ คงเดิม) ...
 
-  function handleOverlayKeydown(event: KeyboardEvent) {
-    if (event.key === "Enter" || event.key === " ") {
-      toggleMenu();
-    }
-  }
+  function toggleMenu() { isMenuOpen = !isMenuOpen; }
+  function handleOverlayKeydown(event: KeyboardEvent) { if (event.key === "Enter" || event.key === " ") toggleMenu(); }
+  beforeNavigate(({ type, cancel }) => { if (type === "popstate") cancel(); });
+  function handleLogout() { auth.logout(); isMenuOpen = false; goto("/auth/login", { replaceState: true }); }
+  function toggleReadMore(index: number) { events[index].isReadMore = !events[index].isReadMore; }
+  function clearClientData() { localStorage.removeItem("user_info"); localStorage.removeItem("access_token"); isMenuOpen = false; }
 
-  function clearClientData() {
-      localStorage.removeItem("user_info");
-      isMenuOpen = false;
-  }
-
-  beforeNavigate(({ type, cancel }) => {
-      if (type === "popstate") {
-      cancel();
-    }
-  });
-
-  function handleLogout() {
-    auth.logout();
-    isMenuOpen = false;
-
-      goto("/auth/login", {replaceState: true});
-  }
-  function toggleReadMore(index: number) {
-    events[index].isReadMore = !events[index].isReadMore;
-  }
 
   async function handleRegister(eventItem: EventItem) {
-      const result = await Swal.fire({
-          title: "Confirm Registration",
+    if (eventItem.isJoined) {
+      await goto("/student/myevents-upcoming");
+      return;
+    }
+
+    const result = await Swal.fire({
+      title: "Confirm Registration",
       html: `Are you sure you want to register for <br><b style="color: #10B981;">"${eventItem.title}"</b>?`,
-          icon: "question",
+      icon: "question",
       showCancelButton: true,
-          confirmButtonColor: "#10B981",
-          cancelButtonColor: "#6B7280",
-      iconColor: "#10B981",
-          confirmButtonText: "Yes, Register",
-          cancelButtonText: "Cancel",
-          background: "#fff",
-          width: "320px",
-      }).then(async (result) => {
-      if (result.isConfirmed) {
-          try {
-              const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(
-                  /\/$/,
-                  "",
-              );
-              const token = localStorage.getItem("access_token");
-
-              if (!token) {
-                  Swal.fire("Error", "กรุณาเข้าสู่ระบบก่อนลงทะเบียน", "error");
-                  return;
-              }
-              const res = await fetch(
-                  `${base}/api/participations/join?event_id=${eventItem.id}`,
-                  {
-                      method: "POST",
-                      headers: {
-                          "Content-Type": "application/json",
-                          Authorization: `Bearer ${token}`,
-                      },
-                      body: JSON.stringify({event_id: eventItem.id})
-                  },
-              );
-              if (res.ok) {
-                  const data = await res.json();
-                  console.log("Joined Success:", data);
-                  await Swal.fire({
-                      title: "Registered!",
-                      html: `ลงทะเบียนสำเร็จ!<br>Join Code ของคุณคือ: <b>${data.join_code}</b>`,
-                      icon: "success",
-                      confirmButtonColor: "#10B981",
-                      width: "320px",
-                  });
-
-                  eventItem.participants += 1;
-                  events = events;
-              } else {
-                  // กรณี Error (เช่น ลงทะเบียนซ้ำ หรือ เต็ม)
-                  const errorData = await res.json();
-                  Swal.fire({
-                      title: "Registration Failed",
-                      text: errorData.detail || "เกิดข้อผิดพลาดในการลงทะเบียน",
-                      icon: "error",
-                      confirmButtonColor: "#EF4444",
-                      width: "320px",
-                  });
-              }
-          } catch (err) {
-              console.error("Register Error:", err);
-              Swal.fire("Error", "ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้", "error");
-          }
-      }
+      confirmButtonColor: "#10B981",
+      cancelButtonColor: "#6B7280",
+      confirmButtonText: "Yes, Register",
+      cancelButtonText: "Cancel",
     });
+
+    if (result.isConfirmed) {
+      try {
+        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+        const token = localStorage.getItem("access_token");
+        if (!token) {
+          Swal.fire("Error", "กรุณาเข้าสู่ระบบก่อนลงทะเบียน", "error");
+          return;
+        }
+
+        const res = await fetch(`${base}/api/participations/join`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ event_id: eventItem.id }),
+        });
+
+        const responseData = await res.json();
+
+        if (res.ok) {
+          eventItem.isJoined = true;
+          if (responseData.id) eventItem.participationId = responseData.id;
+
+          // --- [ACTION] ดึงยอดใหม่ทันทีหลังสมัคร ---
+          const newCount = await fetchEventStats(eventItem.id, token, base);
+          if (newCount !== null) {
+              eventItem.participants = newCount;
+          } else {
+              // Fallback: ถ้าดึงไม่ได้จริงๆ ค่อย +1 เอาเอง
+              eventItem.participants += 1;
+          }
+          events = events; // Trigger Svelte Reactivity
+
+          await Swal.fire({
+            title: "Success!",
+            text: "ลงทะเบียนเรียบร้อยแล้ว",
+            icon: "success",
+            timer: 2000,
+            showConfirmButton: false,
+          });
+        } else {
+          // ... Error Handling ...
+          console.error("Register Failed:", responseData);
+          const errorMsg = responseData.detail || responseData.message || "เกิดข้อผิดพลาดในการลงทะเบียน";
+          if (errorMsg.includes("joined") || res.status === 409) {
+            eventItem.isJoined = true;
+            events = events;
+            Swal.fire("Already Registered", "คุณได้ลงทะเบียนกิจกรรมนี้ไปแล้ว", "warning");
+          } else if (errorMsg.includes("full")) {
+            Swal.fire("Event Full", "กิจกรรมนี้ผู้เข้าร่วมเต็มแล้ว", "error");
+          } else {
+            Swal.fire("Registration Failed", errorMsg, "error");
+          }
+        }
+      } catch (err) {
+        console.error("Network Error:", err);
+        Swal.fire("Error", "ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้", "error");
+      }
+    }
+  }
+
+  async function handleCancel(eventItem: EventItem) {
+    if (!eventItem.participationId) {
+      Swal.fire("Error", "ไม่พบข้อมูลการลงทะเบียน (Participation ID Missing)", "error");
+      return;
+    }
+
+    const result = await Swal.fire({
+      title: "Cancel Registration",
+      text: "กรุณาระบุเหตุผลในการยกเลิก (จำเป็น)",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#ef4444",
+      cancelButtonColor: "#6B7280",
+      confirmButtonText: "Confirm Cancel",
+      input: "text",
+      inputPlaceholder: "เช่น ติดภารกิจ, ป่วย, ธุระด่วน...",
+      inputValidator: (value) => {
+        if (!value) return "กรุณาระบุเหตุผลด้วยครับ!";
+        if (value.length > 500) return "เหตุผลต้องไม่เกิน 500 ตัวอักษร";
+      },
+    });
+
+    if (result.isConfirmed && result.value) {
+      const reason = result.value;
+
+      try {
+        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+        const token = localStorage.getItem("access_token") || "";
+
+        const res = await fetch(
+          `${base}/api/participations/${eventItem.participationId}/cancel`, 
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ cancellation_reason: reason }),
+          }
+        );
+
+        if (res.ok) {
+          eventItem.isJoined = false;
+          eventItem.participationId = null;
+          
+          // --- [ACTION] ดึงยอดใหม่ทันทีหลังยกเลิก ---
+          const newCount = await fetchEventStats(eventItem.id, token, base);
+          if (newCount !== null) {
+              eventItem.participants = newCount; // ใช้ยอดจริงจาก Server (ซึ่งน่าจะลดลงแล้ว)
+          } else {
+              // Fallback: ถ้าดึงไม่ได้จริงๆ ค่อย -1 เอาเอง
+              eventItem.participants = Math.max(0, eventItem.participants - 1);
+          }
+          events = events; 
+
+          Swal.fire("Cancelled", "ยกเลิกการเข้าร่วมเรียบร้อยแล้ว", "success");
+        } else {
+          const errData = await res.json();
+          const errorMsg = errData.detail || errData.message || "ยกเลิกไม่สำเร็จ";
+          Swal.fire("Failed", errorMsg, "error");
+        }
+      } catch (err) {
+        console.error(err);
+        Swal.fire("Error", "เกิดข้อผิดพลาดในการเชื่อมต่อ", "error");
+      }
+    }
   }
 </script>
 
@@ -191,7 +366,6 @@
   <div class="glass-header">
     <div class="header-content">
       <h1 class="page-title">EVENT LIST</h1>
-
       <button
         class="menu-burger"
         class:active={isMenuOpen}
@@ -207,13 +381,12 @@
   {#if isMenuOpen}
     <div
       class="menu-overlay"
+      on:click={toggleMenu}
       role="button"
       tabindex="0"
-      on:click={toggleMenu}
       on:keydown={handleOverlayKeydown}
       transition:fade={{ duration: 200 }}
     ></div>
-
     <div
       class="dropdown-menu"
       transition:scale={{
@@ -223,108 +396,137 @@
         easing: quintOut,
       }}
     >
-      <div class="menu-arrow"></div>
-
-      <a href="/student/monthly-reward" class="menu-item">
-        <span class="icon">🏆</span> Monthly Reward
-      </a>
-      <a href="/student/myevents-upcoming" class="menu-item">
-        <span class="icon">📅</span> My Events
-      </a>
-      <a href="/student/setting-account" class="menu-item">
-        <span class="icon">⚙️</span> Settings
-      </a>
+      <a href="/student/monthly-reward" class="menu-item"
+        ><span class="icon">{"\u{1F3C6}"}</span> Monthly Reward</a
+      >
+      <a href="/student/myevents-upcoming" class="menu-item"
+        ><span class="icon">{"\u{1F4C5}"}</span> My Events</a
+      >
+      <a href="/student/setting-account" class="menu-item"
+        ><span class="icon">{"\u{2699}\u{FE0F}"}</span> Settings</a
+      >
       <div class="menu-divider"></div>
-        <form
-                action="?/logout"
+      <form
+        action="?/logout"
         method="POST"
         use:enhance={() => {
           isMenuOpen = false;
-
           return async ({ result, update }) => {
-            // โค้ดตรงนี้ทำงาน 'หลังจาก' Server ตอบกลับมาแล้ว
             if (result.type === "redirect") {
-              clearClientData(); // ลบ localstorage (ถ้ามี)
-              await goto(result.location); // ไปหน้า login
+              clearClientData();
+              await goto(result.location);
             } else {
-              await update(); // เผื่อกรณี error
+              await update();
             }
           };
         }}
-                style="display: contents;"
+        style="display: contents;"
+      >
+        <button type="button" class="menu-item logout" on:click={handleLogout}
+          ><span class="icon">{"\u{1F6AA}"}</span> Logout</button
         >
-            <button type="button" class="menu-item logout" on:click={handleLogout}>
-                <span class="icon">🚪</span> Logout
-        </button>
-        </form>
+      </form>
     </div>
   {/if}
 
   <div class="scroll-container">
     <div class="content-wrapper">
-      {#each events as event, i}
-        <div class="event-card">
-          <div
-            class="card-image"
-            style="background-image: url('{event.image}');"
-          >
-            <div class="participant-badge">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"
-                  ></path>
-                  <circle cx="9" cy="7" r="4"></circle>
-                  <path
-                          d="M23 21v-2a4 4 0 0 0-3-3.87"
-                  ></path>
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-              </svg
-              >
-              <span>{event.participants}/{event.maxParticipants}</span>
-            </div>
-          </div>
-          <div class="card-body">
-            <h3 class="event-title">{event.title}</h3>
-            <p class="event-desc">{event.description}</p>
-            {#if event.isReadMore}
-              <div class="event-details" transition:fade>
-                <div class="detail-row">
-                  <span class="detail-icon">📅</span>
-                  {event.date}
-                </div>
-                <div class="detail-row">
-                  <span class="detail-icon">⏰</span>
-                  {event.time}
-                </div>
-                <div class="detail-row">
-                  <span class="detail-icon">📍</span>
-                  {event.location}
-                </div>
-              </div>
-            {/if}
-            <div class="card-footer">
-              <button class="read-more-btn" on:click={() => toggleReadMore(i)}>
-                {event.isReadMore ? "Read less" : "Read more"}
-              </button>
-
-                <button
-                        class="register-btn"
-                        on:click={() => handleRegister(event)}
-                >
-                REGISTRATION
-              </button>
-            </div>
-          </div>
+      {#if isLoading}
+        <div style="text-align: center; color: white; padding-top: 20px;">
+          Loading events...
         </div>
-      {/each}
+      {:else}
+        {#each events as event, i}
+          <div class="event-card">
+            <div
+              class="card-image"
+              style="background-image: url('{event.image}');"
+            >
+              <div class="participant-badge">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="9" cy="7" r="4"></circle>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+                <span>{event.participants}/{event.maxParticipants}</span>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <h3 class="event-title">{event.title}</h3>
+
+              {#if event.description && event.description !== "string"}
+                <p class="event-desc">{event.description}</p>
+              {:else}
+                <p
+                  class="event-desc"
+                  style="color: #9ca3af; font-style: italic;"
+                ></p>
+              {/if}
+              {#if event.isReadMore}
+                <div class="event-details" transition:fade>
+                  <div class="detail-row">
+                    <span class="detail-icon">📅</span>
+                    {event.date}
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-icon">⏰</span>
+                    {event.time}
+                  </div>
+                  <div class="detail-row">
+                    <span class="detail-icon">📍</span>
+                    {event.location}
+                  </div>
+                </div>
+              {/if}
+
+              <div class="card-footer">
+                <button
+                  class="read-more-btn"
+                  on:click={() => toggleReadMore(i)}
+                >
+                  {event.isReadMore ? "Read less" : "Read more"}
+                </button>
+
+                {#if event.isJoined}
+                  <div style="display: flex; gap: 8px;">
+                    <button
+                      class="cancel-btn"
+                      on:click={() => handleCancel(event)}
+                    >
+                      CANCEL
+                    </button>
+
+                    <button
+                      class="running-btn"
+                      on:click={() => goto("/student/myevents-upcoming")}
+                    >
+                      RUNNING
+                    </button>
+                  </div>
+                {:else}
+                  <button
+                    class="register-btn"
+                    on:click={() => handleRegister(event)}
+                  >
+                    REGISTRATION
+                  </button>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/each}
+      {/if}
       <div style="height: 40px;"></div>
     </div>
   </div>
@@ -337,7 +539,7 @@
     margin: 0;
     padding: 0;
     background-color: #111827;
-      font-family: "Inter", sans-serif;
+    font-family: "Inter", sans-serif;
     overflow: hidden;
   }
 
@@ -468,23 +670,12 @@
     transform-origin: top right;
   }
 
-  .menu-arrow {
-    position: absolute;
-    top: -6px;
-    right: 14px;
-    width: 12px;
-    height: 12px;
-    background: white;
-    transform: rotate(45deg);
-    border-top-left-radius: 4px;
-  }
-
   .menu-item {
     display: flex;
     align-items: center;
-      padding: 10px 16px;
+    padding: 10px 16px;
     text-decoration: none;
-      color: #374151;
+    color: #374151;
     font-weight: 500;
     font-size: 15px;
     border: none;
@@ -493,14 +684,14 @@
     position: relative;
     z-index: 2;
     width: auto;
-      margin: 4px 8px;
-      border-radius: 8px;
+    margin: 4px 8px;
+    border-radius: 8px;
     transition: all 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   }
 
   .menu-item:hover {
-      background-color: #f3f4f6;
-      color: #10b981;
+    background-color: #f3f4f6;
+    color: #10b981;
     transform: translateX(4px);
   }
 
@@ -509,12 +700,12 @@
   }
 
   .menu-item.logout {
-      color: #ef4444;
+    color: #ef4444;
   }
 
   .menu-item.logout:hover {
-      background-color: #fef2f2;
-      color: #b40808;
+    background-color: #fef2f2;
+    color: #b40808;
   }
 
   .icon {
@@ -530,7 +721,7 @@
   .menu-divider {
     height: 1px;
     background: #e5e7eb;
-      margin: 6px 12px;
+    margin: 6px 12px;
   }
 
   .scroll-container {
@@ -584,17 +775,26 @@
     text-align: left;
   }
   .event-title {
-    margin: 0 0 8px 0;
+    margin: 0 0 12px 0;
     font-size: 18px;
     font-weight: 700;
     color: #111827;
     text-transform: uppercase;
+    letter-spacing: -0.025em; /* บีบตัวอักษรนิดนึงให้ดู Modern */
+    line-height: 1.3;
   }
   .event-desc {
     font-size: 14px;
-    color: #6b7280;
-    margin: 0 0 16px 0;
-    line-height: 1.5;
+    color: #4b5563; /* ใช้สีเทาโทนเย็น (Cool Gray) ดูแพงกว่าสีดำสนิท */
+    line-height: 1.6; /* เพิ่มช่องว่างระหว่างบรรทัดให้อ่านสบายตา */
+    margin: 0 0 20px 0; /* ดัน Footer/Read more ให้ห่างออกไป */
+    font-weight: 400;
+
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.3s ease;
   }
   .event-details {
     background: #f9fafb;
@@ -644,5 +844,35 @@
   }
   .register-btn:hover {
     background-color: #059669;
+  }
+  .running-btn {
+    background-color: #f59e0b; /* สีเหลือง Amber */
+    color: white;
+    border: none;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: background-color 0.2s;
+  }
+  .running-btn:hover {
+    background-color: #d97706; /* สีเหลืองเข้ม */
+  }
+  .cancel-btn {
+    background-color: #ef4444; /* สีแดง */
+    color: white;
+    border: none;
+    padding: 8px 16px; /* ลด padding ลงนิดนึงให้ดูสมดุล */
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: background-color 0.2s;
+  }
+  .cancel-btn:hover {
+    background-color: #dc2626; /* แดงเข้มเมื่อ Hover */
   }
 </style>
