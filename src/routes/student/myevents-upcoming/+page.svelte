@@ -227,7 +227,7 @@
     }
   }
 
-  // ✅ FIXED: Two-step upload process with resubmit support
+   // ✅ FIXED: Two-step upload process with resubmit support
   async function submitProof(participationId: number, participationStatus: string) {
     if (!selectedFile || !token) return;
     
@@ -262,12 +262,13 @@
       let proofRes;
       
       if (isResubmit) {
-        // For REJECTED status - use resubmit endpoint if available
-        // Try resubmit endpoint first, fallback to regular submit
+        // For REJECTED status - use PUT /resubmit-proof endpoint
+        // Changes status from REJECTED → PROOF_SUBMITTED
+        // Clears rejection_reason and rejected_at
         proofRes = await fetch(
           `${API_BASE_URL}/api/participations/${participationId}/resubmit-proof`,
           {
-            method: "POST",
+            method: "PUT",
             headers: {
               Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
@@ -277,25 +278,9 @@
             }),
           },
         );
-
-        // If resubmit endpoint doesn't exist (404), try regular submit
-        if (proofRes.status === 404) {
-          proofRes = await fetch(
-            `${API_BASE_URL}/api/participations/${participationId}/submit-proof`,
-            {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${token}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                proof_image_url: imageUrl,
-              }),
-            },
-          );
-        }
       } else {
-        // Regular submit for first-time submission
+        // Regular submit for first-time submission (CHECKED_IN → PROOF_SUBMITTED)
+        // POST /submit-proof endpoint
         proofRes = await fetch(
           `${API_BASE_URL}/api/participations/${participationId}/submit-proof`,
           {
