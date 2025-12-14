@@ -5,10 +5,14 @@
   import Swal from "sweetalert2";
   import { enhance } from "$app/forms";
   import { auth } from "$lib/utils/auth";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+
+  const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
   let isLoading = true;
   let isMenuOpen = false;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let isRefreshing = false;
 
   interface EventItem {
     id: number;
@@ -29,6 +33,7 @@
     isReadMore: boolean;
     isJoined: boolean;
     participationId: number | null;
+    participationStatus: string | null;
   }
 
   let events: EventItem[] = [];
@@ -41,58 +46,37 @@
       hour12: false,
       timeZone: "Asia/Bangkok",
     };
-    // format เวลาให้เป็นแบบไทย (อาจจะได้ 15:00 หรือ 15.00 แล้วแต่ Browser)
     const start = new Date(startDateStr).toLocaleTimeString("th-TH", options);
-    
+
     if (endDateStr) {
       const end = new Date(endDateStr).toLocaleTimeString("th-TH", options);
-      // ถ้าเวลาเริ่มกับจบเหมือนกัน (เช่นจบสิ้นวัน) ให้โชว์แค่เวลาเริ่ม
       if (start === end) return start;
       return `${start} - ${end}`;
     }
     return start;
   };
 
-  // --- [UPDATED] Helper: ดึงยอดผู้เข้าร่วมล่าสุด (นับเฉพาะสถานะที่ Active) ---
-  async function fetchEventStats(eventId: number, token: string, baseUrl: string): Promise<number | null> {
-    try {
-      // console.log(`Fetching stats for Event ID: ${eventId}`); // Uncomment เพื่อดู log
-      const res = await fetch(`${baseUrl}/api/events/${eventId}/stats`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      if (res.ok) {
-        const statsData = await res.json();
-        // console.log(`Stats for Event ${eventId}:`, statsData); // ดูข้อมูลดิบจาก API
-
-        // รับค่า status object
-        const s = statsData.status || statsData.status_counts || statsData || {};
-
-        // รวมยอด (ตัด Cancelled)
-        const count = 
-          (s["JOINED"] || s["joined"] || 0) +
-          (s["PROOF_SUBMITTED"] || s["proof_submitted"] || s["CHECKED_IN"] || s["checked_in"] || 0) +
-          (s["COMPLETED"] || s["completed"] || 0) +
-          (s["REJECTED"] || s["rejected"] || 0);
-
-        return count;
-      } else {
-        console.warn(`API Error for Event ${eventId}: Status ${res.status}`);
-      }
-    } catch (err) {
-      console.warn(`Failed to fetch stats for event ${eventId}`, err);
-    }
-    return null;
+  async function handleSessionExpired() {
+    await Swal.fire({
+      icon: "warning",
+      title: "Session Expired",
+      text: "Your token is times up",
+      confirmButtonText: "Login",
+      confirmButtonColor: "#10B981",
+      allowOutsideClick: false,
+    });
+    handleLogout();
   }
 
-  onMount(async () => {
+  async function loadData() {
+    isLoading = true;
+    isRefreshing = true;
     try {
-      const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-      const token = localStorage.getItem("access_token") || "";
+      const token = localStorage.getItem("access_token");
       const userInfoStr = localStorage.getItem("user_info");
 
       if (!token || !userInfoStr) {
-        console.error("Token หรือข้อมูลผู้ใช้ไม่พบ");
+        handleSessionExpired();
         return;
       }
 
@@ -114,20 +98,32 @@
         }),
       ]);
 
+      // ✅ Check 401 Unauthorized (Token หมดอายุ)
+      if (eventsRes.status === 401 || myParticipationsRes.status === 401) {
+        await handleSessionExpired();
+        return;
+      }
+
       if (!eventsRes.ok)
         throw new Error(`Events API Error: ${eventsRes.status}`);
 
       const eventsData = await eventsRes.json();
-      // console.log("Events Data:", eventsData); // เปิดดูได้ว่า API ส่ง time มาไหม
 
-      const myParticipationMap = new Map<number, number>();
+      const myParticipationMap = new Map<
+        number,
+        { id: number; status: string }
+      >();
 
       if (myParticipationsRes.ok) {
         const myData = await myParticipationsRes.json();
         myData.forEach((item: any) => {
           const status = item.status ? item.status.toUpperCase() : "";
           if (status !== "CANCELLED" && status !== "CANCEL") {
-            myParticipationMap.set(Number(item.event_id), Number(item.id));
+            // เก็บทั้ง ID และ Status
+            myParticipationMap.set(Number(item.event_id), {
+              id: Number(item.id),
+              status: status,
+            });
           }
         });
       }
@@ -137,25 +133,25 @@
         const eventTime = e.event_end_date
           ? new Date(e.event_end_date)
           : new Date(e.event_date);
-        return eventTime >= now;
+          
+        // เงื่อนไข: 1.เวลายังไม่จบ 2.สถานะต้อง Published เท่านั้น
+        return eventTime >= now && e.is_published === true;
       });
 
       const enrichedEvents = await Promise.all(
         activeEventsData.map(async (e: any) => {
-          
-          // ดึงยอด Stats (ตามที่คุณต้องการในข้อก่อนหน้า)
           const realTimeCount = await fetchEventStats(e.id, token, base);
-          const finalCount = realTimeCount !== null ? realTimeCount : (e.participant_count || 0);
+          const finalCount =
+            realTimeCount !== null ? realTimeCount : e.participant_count || 0;
 
-          const myPartId = myParticipationMap.get(e.id) || null;
-          const amIJoined = myPartId !== null;
+          const myPartData = myParticipationMap.get(e.id);
+          const amIJoined = !!myPartData;
+          const myStatus = myPartData ? myPartData.status : null;
 
-          // --- [FIXED] Logic การแสดงเวลา ---
-          // เช็คว่ามี e.time หรือ e.event_time จาก API ไหม?
-          // ถ้ามีให้ใช้เลย ถ้าไม่มีให้ใช้ formatTimeRange คำนวณจากวันที่
-          const displayTime = (e.time || e.event_time) 
-            ? (e.time || e.event_time) 
-            : formatTimeRange(e.event_date, e.event_end_date);
+          const displayTime =
+            e.time || e.event_time
+              ? e.time || e.event_time
+              : formatTimeRange(e.event_date, e.event_end_date);
 
           return {
             id: e.id,
@@ -180,17 +176,22 @@
                   timeZone: "Asia/Bangkok",
                 })
               : "N/A",
-            
-            time: displayTime, 
-            
+            time: displayTime,
             isReadMore: false,
             isJoined: amIJoined,
-            participationId: myPartId,
+            participationId: myPartData ? myPartData.id : null,
+            participationStatus: myStatus, // ✅ Set status
           };
-        })
+        }),
       );
 
-      events = enrichedEvents;
+      // ✅ Filter: กรองกิจกรรมที่ COMPLETED ออกไป ไม่ให้แสดง
+      events = enrichedEvents.filter(
+        (e) => e.participationStatus !== "COMPLETED",
+      );
+
+      // เริ่ม Polling ถ้ามีข้อมูล (เรียกฟังก์ชัน startPolling ของเดิม)
+      if (events.length > 0) startPolling(30000);
     } catch (err) {
       console.error("Error loading data:", err);
       Swal.fire({
@@ -200,18 +201,153 @@
       });
     } finally {
       isLoading = false;
+      isRefreshing = false;
     }
+  }
+
+  async function fetchEventStats(
+    eventId: number,
+    token: string,
+    baseUrl: string,
+  ): Promise<number | null> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const res = await fetch(`${baseUrl}/api/events/${eventId}/stats`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const statsData = await res.json();
+        if (typeof statsData.total_participants === "number") {
+          return statsData.total_participants;
+        }
+        if (
+          statsData.status_counts &&
+          typeof statsData.status_counts === "object"
+        ) {
+          const statusCounts = statsData.status_counts;
+          const total = Object.keys(statusCounts).reduce((sum, key) => {
+            if (
+              key.toUpperCase() !== "CANCELLED" &&
+              key.toUpperCase() !== "CANCEL"
+            ) {
+              return sum + (Number(statusCounts[key]) || 0);
+            }
+            return sum;
+          }, 0);
+          return total;
+        }
+        const statusObj = statsData.status || statsData;
+        if (statusObj && typeof statusObj === "object") {
+          const total = Object.keys(statusObj).reduce((sum, key) => {
+            const upperKey = key.toUpperCase();
+            if (upperKey !== "CANCELLED" && upperKey !== "CANCEL") {
+              return sum + (Number(statusObj[key]) || 0);
+            }
+            return sum;
+          }, 0);
+          return total;
+        }
+
+        console.warn(
+          `Unexpected API response structure for event ${eventId}:`,
+          statsData,
+        );
+      }
+    } catch (err: any) {
+      if (err.name !== "AbortError") {
+        console.warn(`Failed to fetch stats for event ${eventId}`, err);
+      }
+    }
+    return null;
+  }
+
+  async function batchUpdateEvents(): Promise<void> {
+    const token = localStorage.getItem("access_token") || "";
+
+    if (!token || events.length === 0) return;
+
+    const batchSize = 5;
+
+    for (let i = 0; i < events.length; i += batchSize) {
+      const batch = events.slice(i, i + batchSize);
+
+      await Promise.all(
+        batch.map(async (event, batchIndex) => {
+          const newCount = await fetchEventStats(event.id, token, base);
+          if (newCount !== null) {
+            const actualIndex = i + batchIndex;
+            if (events[actualIndex]) {
+              events[actualIndex].participants = newCount;
+            }
+          }
+        }),
+      );
+    }
+
+    events = [...events];
+  }
+
+  function startPolling(intervalMs: number = 30000) {
+    if (pollInterval) return;
+
+    pollInterval = setInterval(async () => {
+      try {
+        await batchUpdateEvents();
+        console.log("✅ Events updated via polling");
+      } catch (err) {
+        console.error("❌ Polling error:", err);
+      }
+    }, intervalMs);
+  }
+
+  function stopPolling() {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  }
+
+  onMount(async () => {
+    loadData();
   });
 
-  // ... (ฟังก์ชัน Menu, Navigate อื่นๆ คงเดิม) ...
+  onDestroy(() => {
+    stopPolling();
+  });
 
-  function toggleMenu() { isMenuOpen = !isMenuOpen; }
-  function handleOverlayKeydown(event: KeyboardEvent) { if (event.key === "Enter" || event.key === " ") toggleMenu(); }
-  beforeNavigate(({ type, cancel }) => { if (type === "popstate") cancel(); });
-  function handleLogout() { auth.logout(); isMenuOpen = false; goto("/auth/login", { replaceState: true }); }
-  function toggleReadMore(index: number) { events[index].isReadMore = !events[index].isReadMore; }
-  function clearClientData() { localStorage.removeItem("user_info"); localStorage.removeItem("access_token"); isMenuOpen = false; }
+  function toggleMenu() {
+    isMenuOpen = !isMenuOpen;
+  }
+  function handleOverlayKeydown(event: KeyboardEvent) {
+    if (event.key === "Enter" || event.key === " ") toggleMenu();
+  }
+  beforeNavigate(({ type, cancel }) => {
+    if (type === "popstate") cancel();
+  });
 
+  function handleLogout() {
+    auth.logout();
+    isMenuOpen = false;
+    clearClientData();
+    goto("/auth/login", { replaceState: true });
+  }
+
+  function toggleReadMore(index: number) {
+    events[index].isReadMore = !events[index].isReadMore;
+    events = [...events];
+  }
+
+  function clearClientData() {
+    localStorage.removeItem("user_info");
+    localStorage.removeItem("access_token");
+    isMenuOpen = false;
+  }
 
   async function handleRegister(eventItem: EventItem) {
     if (eventItem.isJoined) {
@@ -232,7 +368,10 @@
 
     if (result.isConfirmed) {
       try {
-        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(
+          /\/$/,
+          "",
+        );
         const token = localStorage.getItem("access_token");
         if (!token) {
           Swal.fire("Error", "กรุณาเข้าสู่ระบบก่อนลงทะเบียน", "error");
@@ -254,15 +393,14 @@
           eventItem.isJoined = true;
           if (responseData.id) eventItem.participationId = responseData.id;
 
-          // --- [ACTION] ดึงยอดใหม่ทันทีหลังสมัคร ---
+          // ดึงยอดใหม่ทันทีหลังสมัคร
           const newCount = await fetchEventStats(eventItem.id, token, base);
           if (newCount !== null) {
-              eventItem.participants = newCount;
+            eventItem.participants = newCount;
           } else {
-              // Fallback: ถ้าดึงไม่ได้จริงๆ ค่อย +1 เอาเอง
-              eventItem.participants += 1;
+            eventItem.participants += 1;
           }
-          events = events; // Trigger Svelte Reactivity
+          events = [...events]; // Trigger reactivity
 
           await Swal.fire({
             title: "Success!",
@@ -272,13 +410,19 @@
             showConfirmButton: false,
           });
         } else {
-          // ... Error Handling ...
           console.error("Register Failed:", responseData);
-          const errorMsg = responseData.detail || responseData.message || "เกิดข้อผิดพลาดในการลงทะเบียน";
+          const errorMsg =
+            responseData.detail ||
+            responseData.message ||
+            "เกิดข้อผิดพลาดในการลงทะเบียน";
           if (errorMsg.includes("joined") || res.status === 409) {
             eventItem.isJoined = true;
-            events = events;
-            Swal.fire("Already Registered", "คุณได้ลงทะเบียนกิจกรรมนี้ไปแล้ว", "warning");
+            events = [...events];
+            Swal.fire(
+              "Already Registered",
+              "คุณได้ลงทะเบียนกิจกรรมนี้ไปแล้ว",
+              "warning",
+            );
           } else if (errorMsg.includes("full")) {
             Swal.fire("Event Full", "กิจกรรมนี้ผู้เข้าร่วมเต็มแล้ว", "error");
           } else {
@@ -294,7 +438,11 @@
 
   async function handleCancel(eventItem: EventItem) {
     if (!eventItem.participationId) {
-      Swal.fire("Error", "ไม่พบข้อมูลการลงทะเบียน (Participation ID Missing)", "error");
+      Swal.fire(
+        "Error",
+        "ไม่พบข้อมูลการลงทะเบียน (Participation ID Missing)",
+        "error",
+      );
       return;
     }
 
@@ -318,11 +466,14 @@
       const reason = result.value;
 
       try {
-        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+        const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(
+          /\/$/,
+          "",
+        );
         const token = localStorage.getItem("access_token") || "";
 
         const res = await fetch(
-          `${base}/api/participations/${eventItem.participationId}/cancel`, 
+          `${base}/api/participations/${eventItem.participationId}/cancel`,
           {
             method: "POST",
             headers: {
@@ -330,27 +481,27 @@
               Authorization: `Bearer ${token}`,
             },
             body: JSON.stringify({ cancellation_reason: reason }),
-          }
+          },
         );
 
         if (res.ok) {
           eventItem.isJoined = false;
           eventItem.participationId = null;
-          
-          // --- [ACTION] ดึงยอดใหม่ทันทีหลังยกเลิก ---
+
+          // ดึงยอดใหม่ทันทีหลังยกเลิก
           const newCount = await fetchEventStats(eventItem.id, token, base);
           if (newCount !== null) {
-              eventItem.participants = newCount; // ใช้ยอดจริงจาก Server (ซึ่งน่าจะลดลงแล้ว)
+            eventItem.participants = newCount;
           } else {
-              // Fallback: ถ้าดึงไม่ได้จริงๆ ค่อย -1 เอาเอง
-              eventItem.participants = Math.max(0, eventItem.participants - 1);
+            eventItem.participants = Math.max(0, eventItem.participants - 1);
           }
-          events = events; 
+          events = [...events]; // Trigger reactivity
 
           Swal.fire("Cancelled", "ยกเลิกการเข้าร่วมเรียบร้อยแล้ว", "success");
         } else {
           const errData = await res.json();
-          const errorMsg = errData.detail || errData.message || "ยกเลิกไม่สำเร็จ";
+          const errorMsg =
+            errData.detail || errData.message || "ยกเลิกไม่สำเร็จ";
           Swal.fire("Failed", errorMsg, "error");
         }
       } catch (err) {
@@ -365,6 +516,21 @@
   <div class="glass-header">
     <div class="header-content">
       <h1 class="page-title">EVENT LIST</h1>
+
+      <button 
+        class="refresh-btn" 
+        on:click={loadData} 
+        disabled={isRefreshing}
+        class:spinning={isRefreshing}
+        aria-label="Refresh data"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 4v6h-6"></path>
+            <path d="M1 20v-6h6"></path>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </svg>
+      </button>
+
       <button
         class="menu-burger"
         class:active={isMenuOpen}
@@ -523,6 +689,28 @@
                 {/if}
               </div>
             </div>
+          </div>
+          {:else}
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+                <path d="M8 14h.01"></path>
+                <path d="M12 14h.01"></path>
+                <path d="M16 14h.01"></path>
+                <path d="M8 18h.01"></path>
+                <path d="M12 18h.01"></path>
+                <path d="M16 18h.01"></path>
+              </svg>
+            </div>
+            <h3>No Events Found</h3>
+            <p>Looks like there are no active events right now.<br>Please come back later!</p>
+            <button class="refresh-pill" on:click={loadData}>
+              Check Again
+            </button>
           </div>
         {/each}
       {/if}
@@ -873,5 +1061,131 @@
   }
   .cancel-btn:hover {
     background-color: #dc2626; /* แดงเข้มเมื่อ Hover */
+  }
+  .loading-state {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.6);
+    padding-top: 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .spinner {
+    width: 30px;
+    height: 30px;
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-top-color: #10b981;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  /* ✅ Empty State Design (Minimal & Cool) */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    text-align: center;
+    animation: fadeIn 0.5s ease-out;
+  }
+
+  .empty-icon {
+    color: rgba(255, 255, 255, 0.1); /* สีจางๆ ดูเท่ๆ */
+    margin-bottom: 20px;
+    transform: rotate(-5deg); /* เอียงนิดนึงให้ดูมีลูกเล่น */
+    transition: transform 0.3s ease;
+  }
+  
+  .empty-state:hover .empty-icon {
+    transform: rotate(0deg) scale(1.1);
+    color: rgba(16, 185, 129, 0.4); /* Hover แล้วเปลี่ยนสี */
+  }
+
+  .empty-state h3 {
+    color: #e5e7eb;
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0 0 8px 0;
+    letter-spacing: 0.5px;
+  }
+
+  .empty-state p {
+    color: #9ca3af;
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 0 0 24px 0;
+  }
+  .refresh-btn {
+    position: absolute;
+    right: 70px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    color: rgba(255, 255, 255, 0.8);
+    cursor: pointer;
+    z-index: 52;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .refresh-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.3);
+    color: #fff;
+    transform: translateY(-50%) scale(1.1);
+    box-shadow: 0 0 15px rgba(255, 255, 255, 0.1);
+  }
+  .refresh-btn:active {
+    transform: translateY(-50%) scale(0.9);
+  }
+  .refresh-btn.spinning {
+    cursor: wait;
+    pointer-events: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: #10b981;
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+  .refresh-btn.spinning svg {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .refresh-text, .btn-content {
+    display: none;
+  }
+  .refresh-pill {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #10b981;
+    padding: 8px 20px;
+    border-radius: 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  
+  .refresh-pill:hover {
+    background: rgba(16, 185, 129, 0.1);
+    border-color: rgba(16, 185, 129, 0.3);
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 </style>
