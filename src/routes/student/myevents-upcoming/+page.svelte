@@ -228,8 +228,10 @@
   }
 
   // ✅ FIXED: Two-step upload process with resubmit support
-  async function submitProof(participationId: number, isResubmit: boolean = false) {
+  async function submitProof(participationId: number, participationStatus: string) {
     if (!selectedFile || !token) return;
+    
+    const isResubmit = participationStatus === "rejected";
     isSubmitting = true;
 
     try {
@@ -714,7 +716,6 @@
                               </div>
                             </div>
                           {/if}
-
                           <button
                             class="primary-btn"
                             disabled={!selectedFile || isSubmitting}
