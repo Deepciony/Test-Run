@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
+  import { base } from "$app/paths"; // ✅ ใช้ base path
   import { slide, scale } from "svelte/transition";
   import { onMount } from "svelte";
 
@@ -19,8 +20,10 @@
     }
 
     try {
+      // จัดการ URL และลบ / ท้ายสุดออกป้องกัน path ซ้อน
+      const cleanBase = API_BASE.replace(/\/$/, "");
       const res = await fetch(
-        `${API_BASE}/api/users/verify-email?token=${token}`,
+        `${cleanBase}/api/users/verify-email?token=${token}`,
         {
           method: "GET",
           headers: { "Content-Type": "application/json" },
@@ -31,14 +34,14 @@
       if (res.ok) {
         verifyStatus = "success";
         message = "Email verified successfully.";
+        // บันทึกสถานะว่า verify แล้ว (เผื่อใช้เช็คฝั่ง client)
         localStorage.setItem("register_verified", Date.now().toString());
         const channel = new BroadcastChannel("auth-sync");
         channel.postMessage("register-verified");
         channel.close();
       } else {
         verifyStatus = "error";
-        message =
-          data.detail || data.message || "Verification failed or link expired.";
+        message = data.detail || data.message || "Link expired or invalid.";
       }
     } catch (error) {
       verifyStatus = "error";
@@ -47,7 +50,12 @@
   });
 
   function handleBackToHome() {
-    goto("/");
+    goto(`${base}/`);
+  }
+
+  // ✅ ฟังก์ชันไปหน้า Forgot Password (เพื่อขอ Link ใหม่)
+  function handleRequestNewLink() {
+    goto(`${base}/auth/forgot-password`);
   }
 </script>
 
@@ -55,6 +63,7 @@
   <div class="scroll-container">
     <div class="content-wrapper">
       <div class="form-card">
+        
         {#if verifyStatus === "loading"}
           <div class="icon-wrapper" in:scale={{ duration: 400 }}>
             <div class="loader"></div>
@@ -68,16 +77,7 @@
         {#if verifyStatus === "success"}
           <div class="icon-wrapper" in:scale={{ duration: 400, start: 0.5 }}>
             <div class="success-circle">
-              <svg
-                width="48"
-                height="48"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
                 <polyline points="22 4 12 14.01 9 11.01"></polyline>
               </svg>
@@ -85,51 +85,49 @@
           </div>
           <div class="title-section" style="text-align: center;" in:slide>
             <h1 class="main-title">VERIFICATION SUCCESS</h1>
-            <p class="sub-title">
-              {message}
+            <p class="sub-title">{message}</p>
+            <p class="sub-title" style="margin-top: 16px; color: #9ca3af; font-weight: 600;">
+              You can close this window now.
             </p>
-            <p
-              class="sub-title"
-              style="margin-top: 16px; color: #9ca3af; font-weight: 600;"
-            >
-              You can close this window now..
-            </p>
+          </div>
+          <div class="form-section" in:slide>
+            <button class="primary-btn" on:click={handleBackToHome}>
+                GO TO HOME
+            </button>
           </div>
         {/if}
 
         {#if verifyStatus === "error"}
           <div class="icon-wrapper" in:scale={{ duration: 400, start: 0.5 }}>
             <div class="error-circle">
-              <svg
-                width="48"
-                height="48"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="10"></circle>
                 <line x1="15" y1="9" x2="9" y2="15"></line>
                 <line x1="9" y1="9" x2="15" y2="15"></line>
               </svg>
             </div>
           </div>
+          
           <div class="title-section" style="text-align: center;" in:slide>
-            <h1 class="main-title" style="color: #ef4444;">
-              VERIFICATION FAILED
-            </h1>
-            <p class="sub-title">
-              {message}
-            </p>
+            <h1 class="main-title" style="color: #ef4444;">VERIFICATION FAILED</h1>
+            <p class="sub-title">{message}</p>
           </div>
-          <div class="form-section" in:slide>
-            <button class="primary-btn error-btn" on:click={handleBackToHome}>
+
+          <div class="form-section" in:slide style="gap: 12px;">
+            <p class="sub-title" style="text-align:center; font-size:13px; margin-bottom:4px;">
+                Link expired or invalid?
+            </p>
+            
+            <button class="primary-btn" on:click={handleRequestNewLink}>
+                REQUEST NEW LINK
+            </button>
+
+            <button class="secondary-btn" on:click={handleBackToHome}>
               BACK TO HOME
             </button>
           </div>
         {/if}
+
       </div>
     </div>
   </div>
@@ -161,15 +159,12 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    -webkit-overflow-scrolling: touch;
-    padding-top: 100px;
+    padding-top: 80px;
     padding-bottom: 40px;
     display: flex;
     align-items: flex-start;
   }
-  .scroll-container::-webkit-scrollbar {
-    display: none;
-  }
+
   .content-wrapper {
     width: 100%;
     max-width: 400px;
@@ -184,7 +179,7 @@
   }
   .title-section {
     text-align: left;
-    margin-bottom: 32px;
+    margin-bottom: 24px;
   }
   .main-title {
     color: #f3f4f6;
@@ -202,7 +197,10 @@
   .form-section {
     display: flex;
     flex-direction: column;
+    margin-top: 10px;
   }
+
+  /* Buttons */
   .primary-btn {
     width: 100%;
     padding: 14px 16px;
@@ -213,22 +211,32 @@
     border: none;
     border-radius: 12px;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: all 0.2s;
     text-transform: uppercase;
     box-shadow: 0 4px 6px rgba(16, 185, 129, 0.2);
   }
   .primary-btn:hover {
     background: #059669;
   }
-  .primary-btn.error-btn {
-    background: #ef4444;
-    color: white;
-    box-shadow: 0 4px 6px rgba(239, 68, 68, 0.2);
+  
+  .secondary-btn {
+    width: 100%;
+    padding: 14px 16px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #f3f4f6;
+    font-size: 14px;
+    font-weight: 600;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
   }
-  .primary-btn.error-btn:hover {
-    background: #dc2626;
+  .secondary-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
   }
 
+  /* Icons */
   .icon-wrapper {
     margin-bottom: 32px;
     display: flex;
@@ -268,11 +276,7 @@
     animation: spin 1s linear infinite;
   }
   @keyframes spin {
-    0% {
-      transform: rotate(0deg);
-    }
-    100% {
-      transform: rotate(360deg);
-    }
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
   }
 </style>

@@ -2,6 +2,7 @@
   import { goto } from "$app/navigation";
   import { slide, fade } from "svelte/transition";
   import { onDestroy, onMount } from "svelte";
+  import { base } from '$app/paths';
 
   const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -50,7 +51,7 @@
   function handleStorageEvent(event: StorageEvent) {
     if (event.key === "register_verified") {
       localStorage.removeItem("register_verified");
-      goto("/auth/login");
+      goto(`${base}/auth/login`);
     }
   }
 
@@ -364,7 +365,7 @@
 <div class="app-screen">
   <div class="glass-header">
     {#if !isRegisterSuccess}
-      <a href="/" class="back-btn" aria-label="Back">
+      <a href="{base}/auth/login" class="back-btn" aria-label="Back">
         <svg
           width="24"
           height="24"

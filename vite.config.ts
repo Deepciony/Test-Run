@@ -1,16 +1,15 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
+import Inspect from 'vite-plugin-inspect'
 
 export default defineConfig({
-	plugins: [sveltekit()],
-	server: {
-		proxy: {
-			// เมื่อไหร่ก็ตามที่ Frontend ยิงไปที่ /api
-			'/api': {
-				target: 'http://158.108.102.14:8001', // ให้ส่งต่อไปที่ IP นี้แทน
-				changeOrigin: true,
-				secure: false,
-			}
-		}
-	}
+    plugins: [sveltekit(), Inspect()],
+    server: {
+        // 👇 เปลี่ยนเป็น 3000 (พอร์ตนี้มักจะไม่โดนบล็อกครับ)
+        port: 3000, 
+        
+        
+       
+    }
+    
 });

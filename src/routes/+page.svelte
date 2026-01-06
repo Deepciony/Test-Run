@@ -1,5 +1,6 @@
 <script lang="ts">
     import { goto } from "$app/navigation";
+    import { base } from '$app/paths';
 </script>
 
 <svelte:head>
@@ -9,7 +10,7 @@
 <div class="mobile-wrapper">
     <div class="content-container">
         <div class="logo-section">
-            <img src="/logo-ku.png" alt="KU Logo" style="width: 250px;" />
+            <img src="{base}/logo-ku.png" alt="KU Logo" style="width: 250px;" />
         </div>
 
         <div class="title-section">
@@ -20,11 +21,11 @@
         </div>
 
         <div class="action-section">
-            <a href="/auth/login" class="btn btn-login">
+            <a href="{base}/auth/login" class="btn btn-login">
                 LOGIN NOW
             </a>
 
-            <a href="/auth/register" class="btn btn-signup">
+            <a href="{base}/auth/register" class="btn btn-signup">
                 SIGN UP
             </a>
         </div>

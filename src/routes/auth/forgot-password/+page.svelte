@@ -3,6 +3,8 @@
   import { slide, scale } from "svelte/transition";
   import { onMount, onDestroy } from "svelte";
   import { page } from "$app/stores";
+  import { base } from '$app/paths';
+  import axios from "axios";
 
   const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -14,12 +16,14 @@
   let messageTimeout: any;
   let errorField = "";
 
-  let returnUrl = "/auth/login"; 
+  // ✅ แก้ตรงนี้: ใช้ Backtick (`) และ ${base}
+  let returnUrl = `${base}/auth/login`; 
   
   $: {
     const param = $page.url.searchParams.get("return_to");
     if (param) {
-      returnUrl = param;
+        // ถ้ามี param ส่งมา ก็ใช้ตามนั้น (เช็คด้วยว่าต้องเติม base ไหม ถ้า param ไม่ได้ส่ง base มา)
+        returnUrl = param;
     }
   }
 
@@ -79,20 +83,34 @@
 
     isLoading = true;
     try {
-      const res = await fetch(`${API_BASE}/api/users/forgot-password`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
+      // 1. จัดการ URL: ลบ / ตัวสุดท้ายของ API_BASE ออก (ถ้ามี) เพื่อกัน // ซ้อนกัน
+      const cleanBaseUrl = API_BASE.replace(/\/$/, "");
+      const url = `${cleanBaseUrl}/api/users/forgot-password`;
 
-      if (res.ok) {
-        currentStep = 2;
+      // 2. ใช้ Axios:
+      // - ไม่ต้องใส่ headers 'Content-Type' (Axios ใส่ให้เอง)
+      // - ไม่ต้อง JSON.stringify (Axios แปลงให้เอง)
+      await axios.post(url, { email });
+
+      // ถ้าไม่ Error (Status 200) จะทำงานบรรทัดนี้ทันที
+      currentStep = 2;
+
+    } catch (error: any) {
+      console.error("Email Error:", error);
+
+      // 3. จัดการ Error แบบ Axios
+      if (error.response) {
+        // Server ตอบกลับมา (เช่น 400, 404, 500)
+        // ดึงข้อความจาก data.detail (ตามแบบ FastAPI) หรือข้อความ Default
+        const msg = error.response.data?.detail || "Failed to send email.";
+        showMessage(msg, "error");
+      } else if (error.request) {
+        // ยิงไปแล้ว Server เงียบ / เน็ตหลุด / ติด CORS / Timeout
+        showMessage("Cannot connect to server. Please check your connection.", "error");
       } else {
-        const data = await res.json().catch(() => ({}));
-        showMessage(data.detail || "Failed to send email.", "error");
+        // Error อื่นๆ ของโปรแกรม
+        showMessage("An error occurred. Please try again.", "error");
       }
-    } catch (e) {
-      showMessage("Cannot connect to server.", "error");
     } finally {
       isLoading = false;
     }

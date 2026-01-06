@@ -3,8 +3,11 @@
     import { goto } from '$app/navigation';
     import { browser } from '$app/environment';
     import { onMount } from 'svelte';
+    // ✅ 1. Import base เพื่อเอา path /ku-run มาใช้
+    import { base } from '$app/paths';
 
-    let homePath = '/';
+    // ✅ 2. เริ่มต้น homePath ให้มี base นำหน้า
+    let homePath = `${base}/`;
 
     // --- Config Error Map (เหมือนเดิม) ---
     const errorMap: Record<number, { title: string; defaultDesc: string }> = {
@@ -19,13 +22,14 @@
     $: errorInfo = errorMap[status] || { title: 'Something went wrong', defaultDesc: 'An unexpected error occurred.' };
     $: errorMessage = $page.error?.message || errorInfo.defaultDesc;
 
-    // ✅ 1. ตรวจสอบ Link ตรงนี้ให้เป๊ะ (เติมขีด - ให้ครบ)
+    // ✅ 3. แก้ function นี้ให้ return path ที่มี base นำหน้าเสมอ
     function getSafeRedirect(role: string | null): string {
         const r = role?.toLowerCase() || '';
-        if (r === 'student') return '/student/event-list';  // แก้เป็น event-list
-        if (r === 'officer') return '/officer/event-list';  // แก้เป็น event-list
-        if (r === 'organize') return '/organize/create-event';
-        return '/auth/login';
+        // ใส่ ${base} นำหน้าทุก Link
+        if (r === 'student') return `${base}/student/event-list`;
+        if (r === 'officer') return `${base}/officer/event-list`;
+        if (r === 'organize') return `${base}/organize/create-event`;
+        return `${base}/auth/login`;
     }
 
     onMount(() => {
@@ -36,31 +40,28 @@
             if (token && userInfoStr) {
                 try {
                     const userInfo = JSON.parse(userInfoStr);
-                    // อัปเดต homePath ทันทีที่โหลดเสร็จ
+                    // อัปเดต homePath
                     homePath = getSafeRedirect(userInfo.role);
                 } catch (e) {
-                    homePath = '/auth/login';
+                    // ✅ ใส่ base ตรงนี้ด้วย
+                    homePath = `${base}/auth/login`;
                 }
             } else {
-                homePath = '/auth/login';
+                // ✅ ใส่ base ตรงนี้ด้วย
+                homePath = `${base}/auth/login`;
             }
         }
     });
 
-    // ✅ 2. ปรับ logic ปุ่ม Back
     function goBack() {
         if (!browser) return;
 
-        // ถ้าเป็น 404 (หาหน้าไม่เจอ) การกด Back จะพากลับไปลิงก์ที่ผิดอีก
-        // ให้บังคับกลับ Home Path ที่ถูกต้องแทน
         if (status === 404) {
             goto(homePath, { replaceState: true });
         }
-        // กรณีอื่นๆ ถ้ามีประวัติค่อย Back
         else if (window.history.length > 1) {
             window.history.back();
         }
-        // ถ้าไม่มีทางไป ให้กลับ Home Path
         else {
             goto(homePath, { replaceState: true });
         }
@@ -97,7 +98,21 @@
     :global(body) { margin: 0; background-color: #111827; font-family: 'Inter', sans-serif; }
     .error-wrapper { width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; background-color: #111827; color: white; padding: 20px; box-sizing: border-box; }
     .content-container { text-align: center; max-width: 600px; width: 100%; animation: fadeIn 0.5s ease-out; }
-    .error-code { font-size: 120px; font-weight: 800; margin: 0; line-height: 1; background: linear-gradient(135deg, #00C266 0%, #00a355 50%, #059669 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; opacity: 0.9; }
+   .error-code {
+  /* Layout & Font */
+  font-size: 120px;
+  font-weight: 800;
+  margin: 0;
+  line-height: 1;
+  display: inline-block; 
+  background: linear-gradient(135deg, #00C266 0%, #00a355 50%, #059669 100%);
+  -webkit-background-clip: text;
+  background-clip: text;         
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+
+  opacity: 0.9;
+}
     .error-title { font-size: 28px; font-weight: 700; margin: 16px 0 8px 0; text-transform: uppercase; letter-spacing: 1px; color: #F3F4F6; }
     .error-desc { color: #9CA3AF; font-size: 16px; font-weight: 300; margin-bottom: 40px; }
     .action-section { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }

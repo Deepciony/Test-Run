@@ -2,6 +2,9 @@
   import { goto } from "$app/navigation";
   import { slide } from "svelte/transition";
   import { auth } from "$lib/utils/auth";
+  // ✅ Import base มาใช้
+  import { base } from '$app/paths';
+  import axios from "axios";
 
   let email = "";
   let password = "";
@@ -40,21 +43,21 @@
   function normalizeRole(role: any): string {
     if (!role) return "";
     const r = String(role).trim().toLowerCase();
-    if (["student", "officer", "organizer", "organizer"].includes(r)) return r;
+    if (["student", "officer", "organizer"].includes(r)) return r;
     return "";
   }
 
+  // ✅ แก้ไขตรงนี้: เติม ${base} นำหน้าทุก path
   function getRoleHome(role: string): string {
     switch (role) {
       case "officer":
-        return "/officer/event-list";
+        return `${base}/officer/event-list`;
       case "student":
-        return "/student/event-list";
+        return `${base}/student/event-list`;
       case "organizer":
-      case "organizer":
-        return "/organizer/create-event";
+        return `${base}/organizer/create-event`;
       default:
-        return "/student/event-list";
+        return `${base}/student/event-list`;
     }
   }
 
@@ -67,23 +70,18 @@
     if (!password) return showError("Please enter your password.", "password");
 
     try {
-      const base = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-      const API_URL = `${base}/api/users/login`;
+      const apiBase = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+      const API_URL = `${apiBase}/api/users/login`;
 
-      const res = await fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      // --- AXIOS START ---
+      const res = await axios.post(API_URL, { 
+        email, 
+        password 
       });
 
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        return showError(
-          data?.detail ?? "Login failed. Please check your credentials.",
-          "both"
-        );
-      }
+      // Axios จะ return data อยู่ใน res.data เสมอ
+      const data = res.data; 
+      // --- AXIOS END ---
 
       const accessToken = data.access_token;
       const rawRole = data.role || data.user?.role;
@@ -127,9 +125,23 @@
       console.log("REDIRECTING TO:", home);
 
       await goto(home, { replaceState: true });
-    } catch (err) {
+
+    } catch (err: any) {
       console.error("Login Error:", err);
-      showError("Cannot connect to server. Please try again later.", "both");
+
+      // ✅ 3. Handle Error ของ Axios
+      if (err.response) {
+        // Server ตอบกลับมา (เช่น 400 Bad Request, 401 Unauthorized)
+        // ดึงข้อความ error จาก Backend (สมมติว่า backend ส่งมาใน key 'detail')
+        const serverMsg = err.response.data?.detail || "Login failed. Please check your credentials.";
+        showError(serverMsg, "both");
+      } else if (err.request) {
+        // Network Error (ยิงไม่ไป, Server ดับ, หรือ CORS)
+        showError("Cannot connect to server. Please check your internet or CORS settings.", "both");
+      } else {
+        // Error อื่นๆ
+        showError("An unexpected error occurred.", "both");
+      }
     }
   }
 </script>
@@ -165,7 +177,7 @@
           <div class="form-group">
             <div class="password-header">
               <label class="label" for="password">Password</label>
-              <a href="/auth/forgot-password" class="forgot-link">Forgot ?</a>
+              <a href="{base}/auth/forgot-password" class="forgot-link">Forgot ?</a>
             </div>
             <div
               class="input-field password-field {errorField === 'password' ||
@@ -244,7 +256,7 @@
           <button class="login-button" type="submit"> LOGIN NOW </button>
           <div class="signup-section">
             <span class="signup-text">Don't have an account?</span>
-            <a href="/auth/register" class="signup-link">Sign up</a>
+            <a href="{base}/auth/register" class="signup-link">Sign up</a>
           </div>
         </form>
       </div>
@@ -253,6 +265,7 @@
 </div>
 
 <style>
+  /* Style เดิมทั้งหมด */
   @import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
 
   :global(body) {

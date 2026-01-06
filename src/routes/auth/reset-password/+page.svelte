@@ -3,6 +3,7 @@
   import { slide, scale, fade } from "svelte/transition";
   import { page } from "$app/stores";
   import { onMount, onDestroy } from "svelte";
+  import { base } from '$app/paths';
 
   const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
@@ -103,7 +104,7 @@
 
   function handleBack() {
     if (!isLoading && currentStep !== 2) {
-      goto("/auth/login");
+      goto(`${base}/auth/login`);
     }
   }
 </script>

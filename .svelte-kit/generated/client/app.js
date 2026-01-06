@@ -23,32 +23,35 @@ export const nodes = [
 	() => import('./nodes/19'),
 	() => import('./nodes/20'),
 	() => import('./nodes/21'),
-	() => import('./nodes/22')
+	() => import('./nodes/22'),
+	() => import('./nodes/23')
 ];
 
 export const server_loads = [];
 
 export const dictionary = {
-		"/": [3],
-		"/auth/forgot-password": [4],
-		"/auth/login": [5],
-		"/auth/register": [6],
-		"/auth/reset-password": [7],
-		"/auth/verify-email": [8],
-		"/officer/event-list": [9],
-		"/officer/monthly-reward copy": [11],
-		"/officer/monthly-reward": [10],
-		"/officer/myevents-upcoming": [12],
-		"/officer/setting-account": [13],
-		"/organize/create-event": [14],
-		"/organize/event-verify": [15],
-		"/organize/monthly-reward": [16],
-		"/organize/setting-account": [17],
-		"/organize/upload-proof": [18],
-		"/student/event-list": [19],
-		"/student/monthly-reward": [20],
-		"/student/myevents-upcoming": [21],
-		"/student/setting-account": [22]
+		"/": [2],
+		"/auth/forgot-password": [3],
+		"/auth/login": [4],
+		"/auth/register": [5],
+		"/auth/reset-password": [6],
+		"/auth/verify-email": [7],
+		"/officer/event-list": [8],
+		"/officer/monthly-reward": [9],
+		"/officer/myevents-upcoming": [10],
+		"/officer/setting-account": [11],
+		"/organizer/create-event": [12],
+		"/organizer/event-log": [13],
+		"/organizer/event-verify": [14],
+		"/organizer/monthly-reward": [15],
+		"/organizer/setting-account": [16],
+		"/organizer/unlock-user": [17],
+		"/organizer/upload-proof": [18],
+		"/student": [19],
+		"/student/event-list": [20],
+		"/student/monthly-reward": [21],
+		"/student/myevents-upcoming": [22],
+		"/student/setting-account": [23]
 	};
 
 export const hooks = {
