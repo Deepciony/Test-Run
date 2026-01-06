@@ -7399,103 +7399,110 @@ async function fetchHolidaysFromFile() {
   async function fetchLogs() {
   logsData.loading = true;
   logsData.error = "";
+  const eventId = logsData.selectedEvent?.id;
+  if (!eventId) return;
+
+  console.log(`🚀 [FetchLogs] เริ่มดึงข้อมูลแบบบูรณาการสำหรับ Event ID: ${eventId}`);
 
   try {
-    const eventId = logsData.selectedEvent?.id;
-    if (!eventId) return;
+    // --- 1. ดึงข้อมูลจาก 3 API หลักพร้อมกัน (Timeline, Report, Current Status) ---
+    const [resTimeline, resReport, resStatus] = await Promise.allSettled([
+      api.get(`/api/participations/event/${eventId}/timeline`),
+      api.get(`/api/participations/event/${eventId}/report`),
+      api.get(`/api/participations/event/${eventId}/current-status`)
+    ]);
 
-    console.log("🔍 Fetching logs for event:", eventId);
+    // ตัวแปรสำหรับเก็บข้อมูลที่จะแสดงผล
+    let timelineArray: any[] = [];
+    let statisticsSummary: any = null;
 
-    // ✅ ลองดึงจาก current-status แทน report (เพราะ report อาจจะว่าง หรือสิทธิ์ไม่ถึง)
-    // และตัด Search API ออกก่อนเพราะติด 422
-    let subs = [];
-    try {
-      const res = await api.get(`/api/participations/event/${eventId}/current-status`);
-      console.log("📦 [Debug] Current Status Response:", res.data);
+    // --- 2. จัดการข้อมูลจาก Timeline (สำหรับแสดงรายชื่อในตาราง) ---
+    if (resTimeline.status === 'fulfilled') {
+      // เข้าถึงฟิลด์ .timeline ตามโครงสร้างที่ตรวจพบ
+      timelineArray = resTimeline.value.data.timeline || [];
+      console.log(`📦 Timeline Data: Found ${timelineArray.length} items`);
+    }
+
+    // --- 3. จัดการข้อมูลจาก Report & Current Status (สำหรับสรุปยอดด้านบน) ---
+    if (resReport.status === 'fulfilled' || resStatus.status === 'fulfilled') {
+      const report = resReport.status === 'fulfilled' ? resReport.value.data : null;
+      const current = resStatus.status === 'fulfilled' ? resStatus.value.data : null;
+
+      // รวมสถิติเข้าด้วยกันเพื่อใช้ในหน้า Dashboard
+      statisticsSummary = {
+        totalRegistered: report?.summary?.total_registered || current?.total_registered || 0,
+        completed: report?.summary?.completed || current?.completed || 0,
+        cancelled: report?.summary?.cancelled || current?.by_status?.cancelled || 0,
+        currentlyIn: report?.summary?.currently_in || current?.currently_in_event || 0,
+        lastUpdated: current?.timestamp || report?.generated_at || new Date().toISOString()
+      };
       
-      const data = res.data;
-      // API current-status มักจะส่งมาเป็น { data: [...] } หรือ { participants: [...] }
-      subs = Array.isArray(data) ? data : (data.data || data.participants || data.timeline || []);
-    } catch (err) {
-      console.warn("⚠️ current-status failed, trying report as last resort...");
-      const resReport = await api.get(`/api/participations/event/${eventId}/report`);
-      subs = Array.isArray(resReport.data) ? resReport.data : (resReport.data.data || []);
-    }
-
-    console.log(`📋 Found total ${subs.length} items`);
-
-    if (subs.length === 0) {
-      logsData.logs = [];
-      filteredLogs = [];
-      logsData.loading = false;
-      return;
-    }
-
-    // ✅ ส่วนการดึง User (ปรับให้ยิง API /api/users โดยตรง ไม่ต้องมี prefix แปลกๆ)
-    const userIdSet = new Set<number>();
-    subs.forEach((p: any) => { if(p.user_id) userIdSet.add(p.user_id); });
-    const userIds = Array.from(userIdSet);
-    const userCache: Record<number, any> = {};
-
-    // ดึงทีละนิดเพื่อป้องกัน Server ค้าง
-    const batchSize = 10;
-    for (let i = 0; i < userIds.length; i += batchSize) {
-      const batch = userIds.slice(i, i + batchSize);
-      await Promise.all(batch.map(async (userId) => {
-        try {
-          const userRes = await api.get(`/api/users/${userId}`);
-          userCache[userId] = userRes.data.data || userRes.data;
-        } catch (e) {
-          userCache[userId] = null;
-        }
-      }));
-    }
-
-    // ✅ Map ข้อมูล
-    const logs: Log[] = subs.map((p: any) => {
-      const user = userCache[p.user_id];
-      const userName = user ? `${user.first_name || ""} ${user.last_name || ""}`.trim() : `User ${p.user_id}`;
+      // อัปเดตตัวเลขรวมใน logsData เพื่อให้ Pagination ทำงานถูก
+      logsData.totalItems = statisticsSummary.totalRegistered;
       
-      let action = "registration";
-      let timestamp = p.joined_at || p.created_at || p.updated_at || new Date().toISOString();
+      console.log("📊 Summary Stats Loaded:", statisticsSummary);
+    }
 
-      // Mapping Status
-      if (p.status === "cancelled") action = "registration_cancelled";
-      else if (p.status === "completed") action = "reward_unlocked";
-      else if (p.status === "checked_in") action = "check_in";
-      else if (p.status === "proof_submitted") action = "proof_submitted";
-      else if (p.status === "rejected") action = "no_show";
+    // --- 4. ถ้า Timeline ว่าง แต่ใน Report มีรายชื่อ (Fallback) ---
+    // บางครั้งรายชื่ออาจจะอยู่ใน report.data หรือฟิลด์อื่นๆ
+    if (timelineArray.length === 0 && resReport.status === 'fulfilled') {
+       const reportData = resReport.value.data;
+       timelineArray = reportData.data || reportData.participants || [];
+    }
 
+    // --- 5. Mapping ข้อมูลเข้าตาราง Logs ---
+    const logs: Log[] = timelineArray.map((item: any, index: number) => {
+      // ดึงชื่อจากฟิลด์ต่างๆ ที่อาจเป็นไปได้ (user_name, name, หรือ username)
+      const name = item.user_name || item.name || item.username || `User ${item.user_id || index}`;
+      
+      // กำหนดสถานะ (Action)
+      let actionType = item.type || item.status || "activity";
+      
       return {
-        id: `log_${p.id || p.participation_id}`,
+        id: `log_${eventId}_${index}_${item.timestamp || Date.now()}`,
         eventId: eventId.toString(),
-        eventTitle: logsData.selectedEvent?.title || "",
-        userId: p.user_id?.toString(),
-        userName,
-        userAvatar: user?.profile_image_url 
-          ? (user.profile_image_url.startsWith('http') ? user.profile_image_url : `${API_BASE_URL}${user.profile_image_url.startsWith('/') ? '' : '/'}${user.profile_image_url}`)
-          : `https://api.dicebear.com/7.x/avataaars/svg?seed=${userName}`,
-        action,
-        timestamp,
+        eventTitle: logsData.selectedEvent?.title || "กิจกรรม",
+        userName: name,
+        userAvatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
+        action: actionType,
+        timestamp: item.timestamp || item.created_at || new Date().toISOString(),
         status: "success",
-        details: { ...p },
-        metadata: { role: user?.role || "student", participationStatus: p.status }
+        userId: item.user_id?.toString() || item.join_code || "",
+        userEmail: item.email || "",
+        userNisitId: item.nisit_id || item.join_code || "",
+        details: { 
+          ...item, 
+          source: item.type ? "timeline" : "report" // บอกว่าข้อมูลมาจากไหน
+        },
+        metadata: { 
+          stats_at_fetch: statisticsSummary, // เก็บสถิติไว้ใน metadata เผื่อเรียกใช้
+          join_code: item.join_code 
+        }
       };
     });
 
+    // --- 6. เรียงลำดับและอัปเดต UI ---
     logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     logsData.logs = logs;
     filteredLogs = [...logs];
-    logsData.totalItems = logs.length;
-    logsData.totalPages = Math.ceil(logs.length / logsData.itemsPerPage);
     
-    calculateLogsStatistics(logs);
-    applyLogsFilters();
+    // ถ้า timeline ไม่มี แต่ statistics มีข้อมูล ให้รักษาค่า totalItems ไว้
+    if (logs.length > 0) {
+      logsData.totalItems = logs.length;
+    }
+    logsData.totalPages = Math.ceil(logsData.totalItems / logsData.itemsPerPage);
 
-  } catch (err: any) {
-    console.error("❌ fetchLogs Final Error:", err);
-    logsData.error = "เกิดข้อผิดพลาดในการดึงข้อมูล";
+    // เรียกฟังก์ชันคำนวณสถิติของหน้าจอ (ถ้ามี)
+    if (typeof (window as any).calculateLogsStatistics === 'function') {
+      (window as any).calculateLogsStatistics(logs);
+    }
+
+    console.log("✅ ดึงข้อมูลสมบูรณ์: ทั้งสถิติและรายชื่อกิจกรรม");
+
+  } catch (err) {
+    console.error("❌ fetchLogs Integrated Error:", err);
+    logsData.error = "ไม่สามารถดึงข้อมูลสรุปหรือกิจกรรมได้";
   } finally {
     logsData.loading = false;
   }
